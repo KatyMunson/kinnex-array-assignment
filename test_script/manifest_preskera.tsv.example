@@ -1,0 +1,20 @@
+# Pre-Skera manifest for Snakefile_subsample
+# Tab-separated with header line. Lines starting with # are ignored.
+#
+# Kinnex_Lib  — library name, must match exactly the Kinnex_Lib column in pool.tsv
+# PreSkera_BAM — path to the pre-Skera CCS/HiFi BAM for this library
+#                (one BAM per library, before multiplexing into a pool)
+#
+# Notes:
+#   - Every Kinnex_Lib in pool.tsv that belongs to a Pool/KN_BC group with
+#     more than one library must have an entry here
+#   - Single-library Pool/KN_BC groups are skipped automatically (no
+#     assignment test needed), but their BAMs can still be listed here
+#   - BAM paths can be absolute or relative to the Snakefile_subsample location
+#
+Kinnex_Lib	PreSkera_BAM
+ExampleStudy_Pool001_KN	/path/to/preskera_bams/Pool001.ccs.bam
+ExampleStudy_Pool002_KN	/path/to/preskera_bams/Pool002.ccs.bam
+ExampleStudy_Pool003_KN	/path/to/preskera_bams/Pool003.ccs.bam
+ExampleStudy_Pool004_KN	/path/to/preskera_bams/Pool004.ccs.bam
+ExampleStudy_Pool005_KN	/path/to/preskera_bams/Pool005.ccs.bam

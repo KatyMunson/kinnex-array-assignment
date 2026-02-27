@@ -1,0 +1,88 @@
+# -----------------------------------------------
+# Data files — never commit raw or processed data
+# -----------------------------------------------
+*.bam
+*.bam.bai
+*.cram
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.fasta
+*.fa
+*.vcf
+*.vcf.gz
+*.bcf
+
+# Large tabular outputs
+results/
+*.tsv
+*.csv
+*.xlsx
+*.h5
+*.hdf5
+
+# Sample manifests and pool tables with real data
+# (keep example/template versions, exclude real ones)
+*.tab
+pool.tsv
+manifest*.tsv
+manifest*.tab
+training_pools.tsv
+
+# Primers and adapters (usually large or proprietary)
+primers/
+adapters/
+
+# -----------------------------------------------
+# Snakemake working files
+# -----------------------------------------------
+.snakemake/
+*.snakemake.log
+slurm-*.out
+sge-*.out
+*.cluster.log
+logs/
+
+# -----------------------------------------------
+# Python
+# -----------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.eggs/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# -----------------------------------------------
+# Jupyter
+# -----------------------------------------------
+.ipynb_checkpoints/
+*.ipynb
+
+# -----------------------------------------------
+# Plots and intermediate outputs (regeneratable)
+# -----------------------------------------------
+*.png
+*.pdf
+*.svg
+*.html
+
+# -----------------------------------------------
+# OS / editor noise
+# -----------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

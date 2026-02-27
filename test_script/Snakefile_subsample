@@ -1,0 +1,298 @@
+# =============================================================================
+# Snakefile_subsample — Ground Truth Dataset Generation
+#
+# Creates synthetic multiplexed test pools by subsampling pre-Skera CCS/HiFi
+# BAMs from individual libraries and merging them. Because the source library
+# of every read is known, the merged pools have exact ground truth for use
+# with Snakefile_qc to validate assignment accuracy.
+#
+# Run this BEFORE the production pipeline when validating a new pool design
+# or after updating scoring weights/thresholds.
+# Usage: snakemake -s Snakefile_subsample --configfile config_subsample.yaml --cores <N>
+# See README.md for full documentation.
+#
+# Author:  KM
+# Created: 2026-02
+# =============================================================================
+
+import pandas as pd
+import os
+import sys
+import logging
+import pysam
+import random
+from pathlib import Path
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(levelname)s] %(message)s',
+    stream=sys.stderr
+)
+
+# ----------------------------
+# Config / Inputs
+# ----------------------------
+configfile: "config_subsample.yaml"
+
+POOL_TSV = config["pool_tsv"]
+MANIFEST = config["manifest"]
+
+# Pooling mode configuration
+POOLING_MODE = config.get("pooling_mode", "proportional")  # "proportional" or "even"
+TARGET_TOTAL_READS = config.get("target_total_reads", 100_000)
+RANDOM_SEED = config.get("random_seed", 42)
+
+# Validate pooling mode
+if POOLING_MODE not in ["proportional", "even"]:
+    raise ValueError(f"pooling_mode must be 'proportional' or 'even', got: {POOLING_MODE}")
+
+logging.info(f"Pooling mode: {POOLING_MODE}")
+logging.info(f"Target total reads per pool: {TARGET_TOTAL_READS:,}")
+logging.info(f"Random seed: {RANDOM_SEED}")
+
+# Set random seed for reproducibility
+random.seed(RANDOM_SEED)
+
+# ----------------------------
+# Load and validate pool info
+# ----------------------------
+def load_and_validate_data():
+    """Load and validate input data files."""
+    # Load pool data
+    try:
+        pool_df = pd.read_csv(POOL_TSV, sep="\t")
+    except FileNotFoundError:
+        raise ValueError(f"Pool file not found: {POOL_TSV}")
+    except Exception as e:
+        raise ValueError(f"Error reading pool file {POOL_TSV}: {e}")
+    
+    required_pool_cols = ["Pool", "KN_BC", "Kinnex_Lib", "bc_set", "SC"]
+    if not all(col in pool_df.columns for col in required_pool_cols):
+        raise ValueError(f"pool.tsv missing required columns: {required_pool_cols}")
+    
+    # Load manifest
+    try:
+        manifest_df = pd.read_csv(MANIFEST, sep="\t")
+    except FileNotFoundError:
+        raise ValueError(f"Manifest file not found: {MANIFEST}")
+    except Exception as e:
+        raise ValueError(f"Error reading manifest file {MANIFEST}: {e}")
+    
+    required_manifest_cols = ["Kinnex_Lib", "PreSkera_BAM"]
+    if not all(col in manifest_df.columns for col in required_manifest_cols):
+        raise ValueError(f"manifest.tsv missing required columns: {required_manifest_cols}")
+    
+    manifest_df = manifest_df.set_index("Kinnex_Lib")
+    
+    logging.info(f"Loaded {len(pool_df)} pool entries and {len(manifest_df)} manifest entries")
+    return pool_df, manifest_df
+
+pool_df, manifest_df = load_and_validate_data()
+
+# Filter out Pool/KN_BC combinations with only one library
+targets = []
+skipped_targets = []
+
+for (pool, knbc), group in pool_df.groupby(["Pool", "KN_BC"]):
+    num_libs = len(group)
+    if num_libs > 1:
+        targets.append((pool, knbc))
+    else:
+        skipped_targets.append((pool, knbc))
+        lib_name = group["Kinnex_Lib"].iloc[0]
+        logging.info(f"Skipping Pool {pool}, KN_BC {knbc}: only 1 library ({lib_name}, no assignment test needed)")
+
+POOLS = [str(p) for p, k in targets]
+KNBCS = [k for p, k in targets]
+
+logging.info(f"Pipeline will process {len(targets)} Pool/KN_BC combinations")
+logging.info(f"Skipped {len(skipped_targets)} Pool/KN_BC combinations with only 1 library")
+
+# ----------------------------
+# Wildcard constraints
+# ----------------------------
+# Constrain knbc to match bcM#### pattern to prevent ambiguous parsing
+wildcard_constraints:
+    knbc="bcM\d+",
+    pool="[^/]+"
+
+# ----------------------------
+# Helper functions
+# ----------------------------
+def libs_for_pool_knbc(wildcards):
+    """Return all Kinnex libraries for a given Pool/KN_BC combination."""
+    pool = wildcards.pool  # Keep as string
+    knbc = wildcards.knbc
+    return list(pool_df[(pool_df["Pool"].astype(str) == pool) & (pool_df["KN_BC"] == knbc)]["Kinnex_Lib"])
+
+def bam_path(lib):
+    """Get BAM path for a library, raise if missing."""
+    if lib not in manifest_df.index:
+        raise ValueError(f"Library {lib} not found in manifest")
+    path = manifest_df.loc[lib, "PreSkera_BAM"]
+    if not path or not os.path.exists(path):
+        raise ValueError(f"PreSkera BAM path for {lib} does not exist: {path}")
+    return path
+
+# ----------------------------
+# Rule all
+# ----------------------------
+rule all:
+    input:
+        # 1) Merged BAMs
+        expand("results/merged/{pool}_KN_{knbc}.bam", zip, pool=POOLS, knbc=KNBCS) +
+        # 2) Read lookup files (read name -> library mapping)
+        expand("results/lookup/{pool}_KN_{knbc}_reads.txt", zip, pool=POOLS, knbc=KNBCS) +
+        # 3) Arrays files
+        expand("results/arrays/{pool}_KN_{knbc}.txt", zip, pool=POOLS, knbc=KNBCS)
+
+# ----------------------------
+# Rule: Subsample reads from individual library BAMs
+# ----------------------------
+rule subsample_library:
+    output:
+        bam=temp("results/subsampled/{pool}_KN_{knbc}_{lib}.bam"),
+        read_list="results/subsampled/{pool}_KN_{knbc}_{lib}_reads.txt"
+    threads: 1
+    resources:
+        mem=16, hrs=2
+    run:
+        pool = wildcards.pool  # Keep as string
+        knbc = wildcards.knbc
+        lib = wildcards.lib
+        
+        logging.info(f"Processing: Pool={pool}, KN_BC={knbc}, Lib={lib}")
+        
+        # Get all libraries in this pool/KN_BC combination (used for even mode and validation)
+        pool_all_libs = pool_df[
+            (pool_df["Pool"].astype(str) == pool) &
+            (pool_df["KN_BC"] == knbc)
+        ]
+        
+        if len(pool_all_libs) == 0:
+            raise ValueError(f"No libraries found for Pool '{pool}', KN_BC '{knbc}'. "
+                             f"Available Pool/KN_BC combinations: "
+                             f"{list(pool_df.groupby(['Pool','KN_BC']).groups.keys())}")
+        
+        # Calculate read target for this library
+        if POOLING_MODE == "proportional":
+            pool_subset = pool_df[(pool_df["Pool"].astype(str) == pool) & (pool_df["Kinnex_Lib"] == lib)]
+            
+            if len(pool_subset) == 0:
+                raise ValueError(f"Library '{lib}' not found in Pool '{pool}'. Available libs in this pool: {pool_all_libs['Kinnex_Lib'].tolist()}")
+            
+            # SC is the library's fraction of the total sequencing pool (all SC values
+            # across the full SMRT cell sum to 1.0). Use it directly as the proportion —
+            # no normalisation within KN_BC group, since that would distort the relative
+            # sizes of libraries that share a Kinnex barcode.
+            sc_value = pool_subset["SC"].values[0]
+            target_reads = int(TARGET_TOTAL_READS * sc_value)
+            logging.info(f"[PROPORTIONAL] {lib}: SC={sc_value:.6f}, target={target_reads:,} reads")
+        else:  # even
+            num_libs_in_pool = len(pool_all_libs)
+            target_reads = TARGET_TOTAL_READS // num_libs_in_pool
+            logging.info(f"[EVEN] {lib}: target={target_reads:,} reads ({num_libs_in_pool} libs in pool/KN_BC)")
+        
+        # Get BAM path
+        bam_file = bam_path(lib)
+        logging.info(f"Processing {lib} from {bam_file}")
+        
+        # Count total reads in BAM
+        logging.info(f"Counting reads in BAM...")
+        total_reads = 0
+        with pysam.AlignmentFile(bam_file, "rb", check_sq=False) as bam:
+            for read in bam:
+                total_reads += 1
+        
+        logging.info(f"Found {total_reads:,} reads in {lib}")
+        
+        # Determine how many reads to sample
+        if total_reads <= target_reads:
+            logging.warning(f"{lib} has only {total_reads:,} reads, need {target_reads:,}. Using all available.")
+            reads_to_sample = total_reads
+            # Use all reads
+            selected_indices = set(range(total_reads))
+        else:
+            reads_to_sample = target_reads
+            # Randomly select read indices
+            selected_indices = set(random.sample(range(total_reads), reads_to_sample))
+        
+        logging.info(f"Sampling {reads_to_sample:,} reads from {lib}")
+        
+        # Second pass: Extract selected reads
+        selected_reads = []
+        with pysam.AlignmentFile(bam_file, "rb", check_sq=False) as bam_in:
+            with pysam.AlignmentFile(output.bam, "wb", header=bam_in.header) as bam_out:
+                for idx, read in enumerate(bam_in):
+                    if idx in selected_indices:
+                        bam_out.write(read)
+                        selected_reads.append(read.query_name)
+        
+        logging.info(f"Wrote {len(selected_reads):,} reads to {output.bam}")
+        
+        # Write read list for this library
+        with open(output.read_list, "w") as f:
+            for read_name in sorted(selected_reads):
+                f.write(f"{read_name}\n")
+
+# ----------------------------
+# Rule: Merge subsampled BAMs and create outputs
+# ----------------------------
+rule merge_and_finalize:
+    input:
+        bams=lambda wildcards: expand(
+            "results/subsampled/{pool}_KN_{knbc}_{lib}.bam",
+            pool=wildcards.pool,
+            knbc=wildcards.knbc,
+            lib=libs_for_pool_knbc(wildcards)
+        ),
+        read_lists=lambda wildcards: expand(
+            "results/subsampled/{pool}_KN_{knbc}_{lib}_reads.txt",
+            pool=wildcards.pool,
+            knbc=wildcards.knbc,
+            lib=libs_for_pool_knbc(wildcards)
+        )
+    output:
+        merged_bam="results/merged/{pool}_KN_{knbc}.bam",
+        read_lookup="results/lookup/{pool}_KN_{knbc}_reads.txt",
+        arrays="results/arrays/{pool}_KN_{knbc}.txt"
+    threads: 1
+    resources:
+        mem=16, hrs=2
+    run:
+        pool = wildcards.pool  # Keep as string
+        knbc = wildcards.knbc
+        libs = libs_for_pool_knbc(wildcards)
+        
+        # Merge BAMs
+        if len(input.bams) == 1:
+            # Just copy if only one BAM
+            logging.info(f"Copying single BAM to merged output")
+            shell(f"cp {input.bams[0]} {output.merged_bam}")
+        else:
+            # Merge multiple BAMs
+            logging.info(f"Merging {len(input.bams)} BAMs")
+            pysam.merge("-f", "-o", output.merged_bam, *input.bams)
+        
+        # Create read lookup file (read name -> Library mapping)
+        logging.info(f"Creating read lookup file")
+        with open(output.read_lookup, "w") as lookup_out:
+            lookup_out.write("Read\tKinnexLib\n")
+            for lib, read_file in zip(libs, input.read_lists):
+                with open(read_file) as f:
+                    for line in f:
+                        read_name = line.strip()
+                        lookup_out.write(f"{read_name}\t{lib}\n")
+        
+        # Create arrays.txt file
+        logging.info(f"Creating arrays.txt")
+        with open(output.arrays, "w") as arrays_out:
+            for lib in libs:
+                bc_set = pool_df[(pool_df["Kinnex_Lib"] == lib) & (pool_df["KN_BC"] == knbc)]["bc_set"].values[0]
+                components = [f"IsoSeqX_{bc.strip()}_5p" for bc in bc_set.split(",")]
+                arrays_out.write(f"{lib}\t{knbc}\t" + "\t".join(components) + "\n")
+        
+        # Log statistics
+        total_reads = sum(1 for _ in open(output.read_lookup)) - 1  # subtract header
+        logging.info(f"Completed Pool {pool}, KN_BC {knbc}: {total_reads:,} total reads across {len(libs)} libraries")

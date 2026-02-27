@@ -1,0 +1,48 @@
+# Configuration file for QC Snakefile
+# Run this AFTER your production pipeline and Snakefile_subsample complete
+
+# Required inputs
+pool_tsv: "pool.tsv"
+
+# Directory containing assignment results from production pipeline
+# Should contain files named: {pool}.txt
+assignment_dir: "../prod_script/results/assigned"
+
+# Directory containing ZMW lookup files from subsampling step
+# Created by Snakefile_subsample
+lookup_dir: "results/lookup"
+
+# Script paths
+visualize_script: "scripts/visualize_posteriors.py"
+
+# Optional: Directory containing isoseq refine results
+# Used to check how many misassigned ZMWs produce FLNCs (actual transcripts)
+# Structure: {refine_dir}/{pool}/{library}/{highconf|lowconf}/{library}.fl.*.flnc.report.csv
+# Comment out or remove this line to skip FLNC analysis
+# refine_dir: "path/to/production/results/refine"
+
+
+# ============================================================================
+# OUTPUT DIRECTORY STRUCTURE:
+# ============================================================================
+#
+# results/qc/
+# ├── per_pool/
+# │   └── {pool}_KN_{knbc}/
+# │       ├── summary.txt                       <- Per-ZMW and per-segment accuracy (uses ground truth)
+# │       ├── errors.txt                        <- Detailed misassignment list
+# │       ├── threshold_analysis.csv            <- Accuracy at various thresholds (uses ground truth)
+# │       ├── distributions.png                 <- Posterior distribution plots
+# │       ├── posterior_threshold_analysis.csv  <- Threshold analysis from posterior distributions alone
+# │       ├── flnc_summary.txt                  <- FLNC analysis (if refine_dir set)
+# │       └── flnc_threshold_analysis.csv       <- FLNC-aware thresholds (if refine_dir set)
+# └── aggregate/
+#     ├── HIGH_CONF_correct_table.tsv
+#     ├── HIGH_CONF_incorrect_table.tsv
+#     ├── LOW_CONF_correct_table.tsv
+#     ├── LOW_CONF_incorrect_table.tsv
+#     ├── UNASSIGNED_table.tsv
+#     └── TOTAL_FRACTION_table.tsv
+
+
+

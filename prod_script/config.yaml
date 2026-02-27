@@ -1,0 +1,52 @@
+# Movies to process
+manifest: manifest.tab
+
+# FASTA inputs
+primers_fasta: primers/primers.fasta
+adapters_fasta: adapters/adapters.fasta
+
+assign_script: scripts/assign_kinnex.py
+split_skera_script: scripts/split_skera_by_library.py
+aggregate_script: scripts/aggregate_flnc_qc.py
+pipeline_qc_script: scripts/aggregate_pipeline_qc.py
+sankey_script: scripts/generate_sankey.py
+
+# IsoSeq lima options
+lima:
+  peek_guess: false   # set to false to disable --peek-guess
+
+# IsoSeq refine options
+refine:
+  require_polya: true
+  min_polya_length: 20
+
+# Per-rule SGE resources
+resources:
+  skera:
+    threads: 8
+    mem: 6   # GB
+    hrs: 6
+  lima:
+    threads: 8
+    mem: 8
+    hrs: 12
+  refine:
+    threads: 8
+    mem: 6
+    hrs: 8
+  assign:
+    threads: 2
+    mem: 12
+    hrs: 8
+  split:
+    threads: 2
+    mem: 12
+    hrs: 8
+  aggregate:
+    threads: 1
+    mem: 4
+    hrs: 1
+  qc:
+    threads: 1
+    mem: 8
+    hrs: 2

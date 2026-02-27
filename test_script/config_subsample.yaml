@@ -1,0 +1,77 @@
+# Configuration file for Pre-Skera BAM Subsampling Snakefile
+# This creates test datasets by subsampling CCS/HiFi reads from pre-Skera BAMs
+
+# Required inputs
+pool_tsv: "pool.tsv"
+manifest: "manifest_preskera.tsv"  # Must have columns: Kinnex_Lib, PreSkera_BAM
+
+# Pooling mode: How to distribute reads across libraries in a pool
+# Options:
+#   "proportional" - Use SC values from pool.tsv to determine proportions
+#   "even"         - Split reads evenly among all libraries in the pool
+pooling_mode: "proportional"
+
+# Target total number of reads per pool
+# This total will be split across all libraries in the pool according to pooling_mode
+# Note: Pre-Skera BAMs have 1 read per ZMW (CCS/HiFi reads)
+target_total_reads: 1000000
+
+# Random seed for reproducible subsampling
+random_seed: 42
+
+
+# ============================================================================
+# EXAMPLES:
+# ============================================================================
+
+# Example 1: Small test dataset (fast - a few minutes)
+# ----------------------------------------------------------------------------
+# pooling_mode: "proportional"
+# target_total_reads: 10000  # ~10K reads, very fast for testing
+# random_seed: 42
+
+# Example 2: Medium dataset for validation
+# ----------------------------------------------------------------------------
+# pooling_mode: "proportional"
+# target_total_reads: 100000  # ~100K reads
+# random_seed: 42
+
+# Example 3: Large realistic test
+# ----------------------------------------------------------------------------
+# pooling_mode: "proportional"
+# target_total_reads: 1000000  # ~1M reads
+# random_seed: 42
+
+# Example 4: Even pooling for edge case testing
+# ----------------------------------------------------------------------------
+# pooling_mode: "even"
+# target_total_reads: 100000
+# random_seed: 123
+
+
+# ============================================================================
+# MANIFEST FILE FORMAT:
+# ============================================================================
+# The manifest file must be tab-separated with these columns:
+#   Kinnex_Lib    PreSkera_BAM
+#   
+# Example:
+#   1KG_Pool076_KN    /path/to/1KG_Pool076_KN.ccs.bam
+#   1KG_Pool057_KN    /path/to/1KG_Pool057_KN.ccs.bam
+#   1KG_Pool017_KN    /path/to/1KG_Pool017_KN.ccs.bam
+#
+# These should be CCS/HiFi reads BEFORE Skera segmentation
+
+
+# ============================================================================
+# WORKFLOW:
+# ============================================================================
+# 1. Run this Snakefile to subsample pre-Skera BAMs
+#    Output: results/merged/{pool}_KN_{knbc}.bam
+#
+# 2. Run Skera on the merged BAMs:
+#    skera split results/merged/*.bam --output-prefix skera_output/
+#
+# 3. Run your production pipeline (Lima → assignment)
+#
+# 4. Run QC Snakefile to validate results

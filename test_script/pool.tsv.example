@@ -1,0 +1,6 @@
+Pool	KN_BC	Kinnex_Lib	bc_set	SC
+1	bcM0003	ExampleStudy_Pool001_KN	bc01,bc02,bc03	0.5
+1	bcM0003	ExampleStudy_Pool002_KN	bc04,bc05,bc06	0.25
+1	bcM0003	ExampleStudy_Pool003_KN	bc07,bc08,bc09	0.25
+2	bcM0004	ExampleStudy_Pool004_KN	bc01,bc02,bc03	0.1
+2	bcM0004	ExampleStudy_Pool005_KN	bc04,bc05,bc06	0.9

@@ -1,0 +1,11 @@
+# Production manifest for Snakefile
+# Columns: sample  KN_BC  bam_path  arrays_path
+# Tab-separated, no header line, lines starting with # are ignored
+#
+# sample      — unique identifier for this pool/kinnex-barcode combination
+# KN_BC       — Kinnex barcode (e.g. bcM0003)
+# bam_path    — path to pre-Skera CCS/HiFi BAM
+# arrays_path — path to arrays.txt for this pool
+#
+# Example:
+# Pool001_bcM0003	bcM0003	/path/to/Pool001.ccs.bam	arrays/Pool001_bcM0003.txt
