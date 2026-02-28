@@ -111,6 +111,8 @@ rule check_assignments:
         try:
             truth_df = pd.read_csv(input.read_lookup, sep="\t", dtype=str)
             assign_df = pd.read_csv(input.assignments, sep="\t", dtype=str, comment='#')
+        except Exception as e:
+            raise ValueError(f"Error reading input files: {e}")
 
         # Strip /ccs suffix from truth read names if present
         # Pre-Skera format: movie/zmw/ccs  Post-Skera format: movie/zmw

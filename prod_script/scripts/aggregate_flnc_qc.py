@@ -29,8 +29,12 @@ counts = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict
 
 json_files = glob.glob(str(refine_dir / "*" / "*" / "*" / "*.flnc.filter_summary.report.json"))
 if not json_files:
-    print(f"ERROR: No JSON files found under {refine_dir}", file=sys.stderr)
-    sys.exit(1)
+    print(f"WARNING: No JSON files found under {refine_dir} — writing empty summary", file=sys.stderr)
+    output_tsv.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_tsv, "w") as out:
+        out.write("sample\tlibrary\tconfidence\t" + "\t".join(BARCODES) + "\ttotal_flnc\n")
+    print(f"Written to {output_tsv} (empty — no refine outputs found)", file=sys.stderr)
+    sys.exit(0)
 
 print(f"Found {len(json_files)} JSON files", file=sys.stderr)
 

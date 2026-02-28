@@ -265,9 +265,16 @@ checkpoint lima_pass2:
     shell:
         """
         mkdir -p {output}
-        lima {input.bam} {input.primers} {output}/{wildcards.library}.fl.bam \
-            --isoseq \
-            --peek-guess
+        # Skip lima if the input BAM is a zero-read sentinel (no reads for this
+        # confidence tier). samtools view -c counts records; header-only = 0.
+        n_reads=$(samtools view -c {input.bam})
+        if [ "$n_reads" -eq 0 ]; then
+            echo "[lima_pass2] Skipping {wildcards.library}/{wildcards.confidence}: 0 reads in input BAM"
+        else
+            lima {input.bam} {input.primers} {output}/{wildcards.library}.fl.bam \
+                --isoseq \
+                --peek-guess
+        fi
         """
 
 ############################################

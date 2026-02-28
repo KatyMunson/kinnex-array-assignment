@@ -37,8 +37,9 @@ zmw2high = {}
 zmw2low  = {}
 
 with open(assign_file) as f:
-    next(f)  # skip header
     for line in f:
+        if line.startswith('#') or line.startswith('ZMW'):
+            continue  # skip provenance comment lines and column header
         parts = line.rstrip().split("\t")
         zmw, lib, cls = parts[0], parts[1], parts[2]
 
@@ -90,6 +91,25 @@ with pysam.AlignmentFile(skera_bam, "rb", check_sq=False) as bam:
 for w in writers.values():
     w.close()
 unassigned_writer.close()
+
+# ------------------
+# Write zero-read sentinel BAMs for any library/confidence that produced
+# no reads. Without these files, Snakemake raises MissingInputException
+# for lima_pass2 even though the split ran successfully. The sentinel BAMs
+# are valid (header-only) BAMs with zero records; lima_pass2 handles them
+# gracefully. QC records these as zero-count entries so missingness is visible.
+# ------------------
+all_libs = set(zmw2high.values()) | set(zmw2low.values())
+with pysam.AlignmentFile(skera_bam, "rb", check_sq=False) as bam_template:
+    for lib in sorted(all_libs):
+        for conf, count_key in [("highconf", f"{lib}.HIGH_CONF"),
+                                 ("lowconf",  f"{lib}.LOW_CONF")]:
+            outpath = out_dir / f"{lib}.{conf}.bam"
+            if not outpath.exists():
+                print(f"  [sentinel] {lib}.{conf}.bam — 0 reads (no {count_key} assignments)")
+                with pysam.AlignmentFile(str(outpath), "wb", template=bam_template):
+                    pass  # header only, zero records
+                counts[count_key] = 0
 
 # ------------------
 # QC
