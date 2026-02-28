@@ -47,7 +47,7 @@ def load_data(assignment_files, lookup_files):
     all_data = []
     for assign_file in assignment_files:
         print(f"Processing {assign_file}...")
-        df = pd.read_csv(assign_file, sep='\t', dtype=str)
+        df = pd.read_csv(assign_file, sep='\t', dtype=str, comment='#')
         df['Top_Posterior'] = pd.to_numeric(df['Top_Posterior'], errors='coerce')
         
         for _, row in df.iterrows():

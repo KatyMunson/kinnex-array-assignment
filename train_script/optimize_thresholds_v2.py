@@ -65,7 +65,7 @@ def load_data(assignment_files, lookup_files):
     all_rows = []
     for assign_file in assignment_files:
         print(f"  Loading {Path(assign_file).name}...")
-        df = pd.read_csv(assign_file, sep='\t', dtype=str)
+        df = pd.read_csv(assign_file, sep='\t', dtype=str, comment='#')
 
         for col in ('Top_Posterior', 'N_Observations', 'Informative_Barcodes',
                     'Uninformative_Barcodes', 'Extraneous_Barcodes'):

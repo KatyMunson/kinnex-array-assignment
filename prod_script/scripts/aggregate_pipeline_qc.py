@@ -183,7 +183,7 @@ for s in samples:
     assign_file = results_dir / "assigned" / f"{s}.txt"
     if not assign_file.exists():
         continue
-    df = pd.read_csv(assign_file, sep="\t")
+    df = pd.read_csv(assign_file, sep="\t", comment='#')
     cls_counts = df["Classification"].value_counts().to_dict()
     total_zmws = len(df)
 

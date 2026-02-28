@@ -26,7 +26,7 @@ def load_assignment_data(assignment_file, lookup_file):
     """Load and merge assignment results with ground truth."""
     # Load data
     truth_df = pd.read_csv(lookup_file, sep="\t", dtype=str)
-    assign_df = pd.read_csv(assignment_file, sep="\t", dtype=str)
+    assign_df = pd.read_csv(assignment_file, sep="\t", dtype=str, comment='#')
     
     # Strip /ccs suffix from truth
     truth_df['Read'] = truth_df['Read'].str.replace('/ccs', '', regex=False)

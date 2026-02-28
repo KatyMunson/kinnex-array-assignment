@@ -45,6 +45,7 @@ slurm-*.out
 sge-*.out
 *.cluster.log
 logs/
+log/
 
 # -----------------------------------------------
 # Python

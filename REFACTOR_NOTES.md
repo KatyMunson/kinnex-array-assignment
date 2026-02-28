@@ -117,3 +117,50 @@ This would make the pipeline fully self-contained and reproducible without
 any manual environment setup.
 
 ---
+
+## Document commit_configs.sh in README
+
+**Issue:** `commit_configs.sh` exists at the repo root but isn't mentioned
+anywhere in the README. A new user (or future-you) would have no idea it's
+there or why they need it.
+
+**Desired outcome:** Add a short section to README.md under a "Repository
+Utilities" or "Git Workflow" heading explaining:
+- Why config files are protected by default (they contain local paths)
+- The three commands and when to use each
+- The typical workflow for committing a template config change
+
+---
+
+## Pool design rules — theoretical justification
+
+**Context:** Analysis of why TRAIN_3way pools produce zero HIGH_CONF reads led
+to a theoretical derivation of maximum allowable barcode overlap given pool
+size and scorer weights.
+
+**Finding:** With 6 barcodes per library, the maximum shared barcodes that
+still allow HIGH_CONF (posterior ≥ 0.840) depends on pool size:
+
+| Pool size | Max shared BCs | Min unique BCs | Max achievable posterior |
+|-----------|---------------|----------------|------------------------|
+| 2 libs    | 4             | 2              | 0.900                  |
+| 3 libs    | 3             | 3              | 0.931                  |
+| 4 libs    | 3             | 3              | 0.900                  |
+| 5 libs    | 3             | 3              | 0.871                  |
+| 6 libs    | 3             | 3              | 0.844                  |
+
+The production rule of max 2 shared barcodes is conservative but well-justified
+— it provides comfortable headroom above the theoretical floor of 3 unique BCs,
+and accounts for real-world noise that pushes observed posteriors below the
+theoretical ceiling.
+
+**Note:** This model assumes shared barcodes appear in exactly 2 libraries.
+When a barcode is shared across 3+ libraries, the weight is
+min(1/N_sharing, MAX_UNINF_WEIGHT) — capped at 0.2 regardless, so the ceiling
+holds as long as MAX_UNINF_WEIGHT is the binding constraint.
+
+**Desired outcome:** Add this analysis and the design rule derivation to the
+README as a "Pool Design" section, providing scientific justification for
+barcode overlap limits rather than just empirical rules.
+
+---

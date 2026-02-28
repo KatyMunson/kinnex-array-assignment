@@ -74,7 +74,7 @@ def load_training_data(assignment_files, lookup_files, arrays):
     # Process assignment files
     for assign_file in assignment_files:
         print(f"Processing {assign_file}...")
-        df = pd.read_csv(assign_file, sep='\t', dtype=str)
+        df = pd.read_csv(assign_file, sep='\t', dtype=str, comment='#')
         
         # Convert numeric columns
         df['Top_Posterior'] = pd.to_numeric(df['Top_Posterior'], errors='coerce')

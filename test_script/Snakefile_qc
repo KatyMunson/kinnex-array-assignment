@@ -110,9 +110,7 @@ rule check_assignments:
     run:
         try:
             truth_df = pd.read_csv(input.read_lookup, sep="\t", dtype=str)
-            assign_df = pd.read_csv(input.assignments, sep="\t", dtype=str)
-        except Exception as e:
-            raise ValueError(f"Error reading input files: {e}")
+            assign_df = pd.read_csv(input.assignments, sep="\t", dtype=str, comment='#')
 
         # Strip /ccs suffix from truth read names if present
         # Pre-Skera format: movie/zmw/ccs  Post-Skera format: movie/zmw
@@ -319,7 +317,7 @@ if REFINE_DIR:
 
             # Load and merge assignments with ground truth
             truth_df = pd.read_csv(input.read_lookup, sep="\t", dtype=str)
-            assign_df = pd.read_csv(input.assignments, sep="\t", dtype=str)
+            assign_df = pd.read_csv(input.assignments, sep="\t", dtype=str, comment='#')
             truth_df['Read'] = truth_df['Read'].apply(
                 lambda x: x[:-4] if x.endswith('/ccs') else x
             )

@@ -20,6 +20,39 @@ import math
 import argparse
 from multiprocessing import Pool
 import os
+import subprocess
+import datetime
+
+# =======================
+# PROVENANCE
+# =======================
+def get_git_provenance():
+    """
+    Return a short git hash for the current commit, with '-dirty' appended if
+    there are uncommitted changes in the working tree. Returns 'unknown' if
+    the script is not inside a git repository or git is unavailable.
+
+    Examples:
+        'a3f2c1b'        — clean commit, fully reproducible
+        'a3f2c1b-dirty'  — uncommitted changes present; parameters are
+                           recorded but exact code state is not pinned
+        'unknown'        — not in a git repo or git not on PATH
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        git_hash = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            capture_output=True, text=True, cwd=script_dir, timeout=5
+        ).stdout.strip()
+        if not git_hash:
+            return 'unknown'
+        dirty = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            capture_output=True, text=True, cwd=script_dir, timeout=5
+        ).stdout.strip()
+        return f"{git_hash}-dirty" if dirty else git_hash
+    except Exception:
+        return 'unknown'
 
 # =======================
 # DEFAULT PARAMETERS
@@ -168,6 +201,15 @@ def main():
         results = [_worker_classify(item) for item in zmw_items]
 
     with open(args.out_file, "w") as out_f:
+        # Write provenance header so parameters and code version are recorded
+        # alongside the data. Lines starting with # are skipped by downstream
+        # scripts that use pandas read_csv with comment='#'.
+        run_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        git = get_git_provenance()
+        out_f.write(f"# assign_kinnex.py | {run_date} | git: {git}\n")
+        out_f.write(f"# INF_WEIGHT={INF_WEIGHT}  MAX_UNINF_WEIGHT={MAX_UNINF_WEIGHT}  EXTRANEOUS_PENALTY={EXTRANEOUS_PENALTY}\n")
+        out_f.write(f"# POSTERIOR_HIGH_CONF={POSTERIOR_HIGH_CONF}  POSTERIOR_LOW_CONF={POSTERIOR_LOW_CONF}\n")
+        out_f.write(f"# MIN_OBS_HIGH_CONF={MIN_OBS_HIGH_CONF}  MIN_OBS_LOW_CONF={MIN_OBS_LOW_CONF}\n")
         out_f.write("ZMW\tAssigned_Array\tClassification\tTop_Posterior\tN_Observations\tInformative_Barcodes\tUninformative_Barcodes\tExtraneous_Barcodes\tArray_Kinnex\tAll_Barcodes\n")
         for zmw, barcodes, best_array, classification, posterior, summary in results:
             out_f.write(f"{zmw}\t{best_array}\t{classification}\t{posterior:.3f}\t{len(barcodes)}\t{summary['inf']}\t{summary['uninf']}\t{summary['extr']}\t{summary['kinnex']}\t{','.join(barcodes)}\n")
