@@ -31,10 +31,8 @@ manifest*.tab
 training_pools.tsv
 
 # Primers and adapters (usually large or proprietary)
-primers/*
-!primers/README.md
-adapters/*
-!adapters/README.md
+primers/
+adapters/
 
 # -----------------------------------------------
 # Snakemake working files
@@ -70,6 +68,14 @@ env/
 # -----------------------------------------------
 .ipynb_checkpoints/
 *.ipynb
+
+# -----------------------------------------------
+# Train script outputs (regeneratable from assigned files)
+# -----------------------------------------------
+train_script/*.json
+train_script/*.txt
+train_script/*.png
+train_script/*.pdf
 
 # -----------------------------------------------
 # Plots and intermediate outputs (regeneratable)
