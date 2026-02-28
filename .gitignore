@@ -31,8 +31,10 @@ manifest*.tab
 training_pools.tsv
 
 # Primers and adapters (usually large or proprietary)
-primers/
-adapters/
+primers/*
+!primers/README.md
+adapters/*
+!adapters/README.md
 
 # -----------------------------------------------
 # Snakemake working files
