@@ -164,3 +164,53 @@ README as a "Pool Design" section, providing scientific justification for
 barcode overlap limits rather than just empirical rules.
 
 ---
+
+## Standardize assignment file parsing via utils.py
+
+**Context:** Adding provenance `#` comment headers to `assign_kinnex.py` output
+required patching 8 separate `read_csv` / `open()` calls across 6 files to
+handle comment lines. `split_skera_by_library.py` was missed on the first pass
+and caused a runtime crash.
+
+**Desired outcome:** Create `prod_script/scripts/utils.py` (or a shared module)
+with a single `load_assignments(path)` function that:
+- Skips `#` comment lines
+- Skips the column header
+- Returns a consistent data structure (pandas DataFrame or dict)
+- Is imported by all scripts that read `.txt` assignment files:
+  - `prod_script/scripts/split_skera_by_library.py`
+  - `prod_script/scripts/aggregate_pipeline_qc.py`
+  - `test_script/Snakefile_qc`
+  - `test_script/scripts/visualize_posteriors.py`
+  - `train_script/optimize_barcode_weights.py`
+  - `train_script/optimize_thresholds.py`
+  - `train_script/optimize_thresholds_v2.py`
+
+Any future change to the assignment file format (new columns, different comment
+syntax, etc.) would then require only one code change.
+
+---
+
+## Training scripts: read scoring parameters from assigned file headers
+
+**Context:** `assign_kinnex.py` now writes scoring parameters as `#` comment
+headers in every assigned output file (INF_WEIGHT, MAX_UNINF_WEIGHT,
+EXTRANEOUS_PENALTY, POSTERIOR_HIGH_CONF, etc.). Currently the training scripts
+(`optimize_barcode_weights.py`, `optimize_thresholds.py`,
+`optimize_thresholds_v2.py`) ignore these headers entirely and assume the
+parameters they were trained on match the current hardcoded constants in
+`assign_kinnex.py`.
+
+**Desired outcome:** When loading an assigned file, parse the `#` header lines
+to extract the parameters used to generate that file. Use these to:
+1. Warn if training files were generated with different parameters than each
+   other (mixing parameter sets invalidates training)
+2. Warn if training files were generated with different parameters than the
+   current `assign_kinnex.py` constants (results may not transfer)
+3. Optionally surface the git hash per file so provenance is fully tracked
+   through the training run
+
+A shared `parse_assignment_header(path)` helper (in the future `utils.py`)
+would make this straightforward across all three scripts.
+
+---

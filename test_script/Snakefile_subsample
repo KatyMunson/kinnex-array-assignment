@@ -316,6 +316,9 @@ rule make_manifest:
         expand("results/manifest_rows/{pool}_KN_{knbc}.tab", zip, pool=POOLS, knbc=KNBCS)
     output:
         "results/manifest.tab"
+    threads: 1
+    resources:
+        mem=1, hrs=1
     run:
         with open(output[0], "w") as out:
             out.write("# Production manifest for prod_script/Snakefile\n")

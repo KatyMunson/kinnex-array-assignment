@@ -32,6 +32,9 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -73,6 +76,7 @@ def load_training_data(assignment_files, lookup_files, arrays):
     
     # Process assignment files
     for assign_file in assignment_files:
+        pool_name = Path(assign_file).stem   # e.g. TRAIN_3way_KN_bcM0010
         print(f"Processing {assign_file}...")
         df = pd.read_csv(assign_file, sep='\t', dtype=str, comment='#')
         
@@ -113,9 +117,14 @@ def load_training_data(assignment_files, lookup_files, arrays):
                 'features': features,
                 'label': label,
                 'zmw': zmw,
+                'pool': pool_name,
                 'classification': classification,
                 'assigned': assigned_array,
-                'true': true_array
+                'true': true_array,
+                'n_inf':   float(row['Informative_Barcodes']),
+                'n_uninf': float(row['Uninformative_Barcodes']),
+                'n_extr':  float(row['Extraneous_Barcodes']),
+                'posterior': float(row['Top_Posterior']),
             })
     
     print(f"Collected {len(training_data):,} training examples")
@@ -318,10 +327,10 @@ def extract_weight_recommendations(model, feature_names, model_type='logistic'):
         # Translate to weight recommendations
         print("\nSuggested Weight Adjustments:")
         
-        # Current weights — must match defaults in assign_kinnex.py
+        # Current weights
         current_inf = 1.0
-        current_uninf = 0.2
-        current_extr = -0.10
+        current_uninf = 0.5
+        current_extr = -1.0
         
         # Scale based on relative coefficients
         inf_coef = feature_dict.get('inf_frac', 1.0)
@@ -338,9 +347,9 @@ def extract_weight_recommendations(model, feature_names, model_type='logistic'):
             'CONFIDENCE': 'medium'
         }
         
-        print(f"  INF_WEIGHT:         {recommended['INF_WEIGHT']:.2f} (unchanged, reference)")
-        print(f"  MAX_UNINF_WEIGHT:   {recommended['MAX_UNINF_WEIGHT']:.3f} (current: {current_uninf})")
-        print(f"  EXTRANEOUS_PENALTY: {recommended['EXTRANEOUS_PENALTY']:.3f} (current: {current_extr})")
+        print(f"  INF_WEIGHT:        {recommended['INF_WEIGHT']:.2f} (unchanged, reference)")
+        print(f"  MAX_UNINF_WEIGHT:  {recommended['MAX_UNINF_WEIGHT']:.2f} (current: {current_uninf})")
+        print(f"  EXTRANEOUS_PENALTY: {recommended['EXTRANEOUS_PENALTY']:.2f} (current: {current_extr})")
         
     else:  # Random Forest
         # For RF, we can't directly extract weight recommendations
@@ -355,13 +364,539 @@ def extract_weight_recommendations(model, feature_names, model_type='logistic'):
         
         recommended = {
             'INF_WEIGHT': 1.0,
-            'MAX_UNINF_WEIGHT': 0.2,
-            'EXTRANEOUS_PENALTY': -0.10,
+            'MAX_UNINF_WEIGHT': 0.5,
+            'EXTRANEOUS_PENALTY': -1.0,
             'CONFIDENCE': 'low',
             'NOTE': 'Random Forest does not provide direct weight translations. Use logistic regression for interpretable weights.'
         }
     
     return recommended
+
+
+def plot_model_diagnostics(model, feature_names, training_data, model_type, output_prefix):
+    """
+    2×2 model diagnostic figure (original plot, now a separate function):
+      [0,0] Feature importance / logistic coefficients
+      [0,1] Posterior distribution coloured by correctness
+      [1,0] Error breakdown by classification tier
+      [1,1] Model calibration curve
+    """
+    import matplotlib.gridspec as gridspec
+
+    X = np.array([[d['features'][f] for f in feature_names] for d in training_data])
+    y = np.array([d['label'] for d in training_data])
+    probs = model.predict_proba(X)[:, 1]
+
+    fig = plt.figure(figsize=(15, 11))
+    fig.suptitle(
+        f"Model Diagnostics — {model_type.replace('_', ' ').title()} "
+        f"(n={len(training_data):,})",
+        fontsize=13, fontweight='bold'
+    )
+    gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.38, wspace=0.35)
+
+    # ── [0,0] Feature importance ──────────────────────────────────────────────
+    ax = fig.add_subplot(gs[0, 0])
+    if model_type == 'logistic':
+        importance = model.coef_[0]
+        title = 'Logistic Regression Coefficients\n(positive → correct assignment)'
+        colors = ['steelblue' if v >= 0 else 'tomato' for v in importance]
+    else:
+        importance = model.feature_importances_
+        title = 'Random Forest Feature Importance'
+        colors = 'steelblue'
+
+    order = np.argsort(np.abs(importance))[::-1][:12]
+    labels = [feature_names[i].replace('_', '\n') for i in order]
+    vals   = [importance[i] for i in order]
+    bar_colors = [colors[i] for i in order] if isinstance(colors, list) else colors
+
+    ax.barh(range(len(vals)), vals[::-1],
+            color=bar_colors[::-1] if isinstance(bar_colors, list) else bar_colors)
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels[::-1], fontsize=7)
+    ax.axvline(0, color='black', linewidth=0.7)
+    ax.set_title(title, fontsize=9)
+    ax.set_xlabel('Coefficient / Importance', fontsize=8)
+    ax.grid(True, axis='x', alpha=0.3)
+
+    # ── [0,1] Posterior distribution by correctness ───────────────────────────
+    ax = fig.add_subplot(gs[0, 1])
+    posteriors = np.array([d['posterior'] for d in training_data])
+    bins = np.linspace(0, 1, 50)
+    ax.hist(posteriors[y == 1], bins=bins, alpha=0.55, color='steelblue',
+            label='Correct', density=True)
+    ax.hist(posteriors[y == 0], bins=bins, alpha=0.55, color='tomato',
+            label='Incorrect', density=True)
+    ax.axvline(0.840, color='green',  linestyle='--', linewidth=1.2,
+               label='HC threshold (0.840)')
+    ax.axvline(0.500, color='orange', linestyle='--', linewidth=1.2,
+               label='LC threshold (0.500)')
+    ax.set_xlabel('Current Posterior Score', fontsize=8)
+    ax.set_ylabel('Density', fontsize=8)
+    ax.set_title('Posterior Distribution by Correctness', fontsize=9)
+    ax.legend(fontsize=7)
+    ax.grid(True, alpha=0.3)
+
+    # ── [1,0] Error breakdown by classification tier ──────────────────────────
+    ax = fig.add_subplot(gs[1, 0])
+    tiers = ['HIGH_CONF', 'LOW_CONF']
+    correct_counts, incorrect_counts = [], []
+    for tier in tiers:
+        mask = np.array([d['classification'] == tier for d in training_data])
+        correct_counts.append(int((y[mask] == 1).sum()))
+        incorrect_counts.append(int((y[mask] == 0).sum()))
+
+    x_pos = np.arange(len(tiers))
+    w = 0.35
+    ax.bar(x_pos - w/2, correct_counts,   w, label='Correct',   color='steelblue', alpha=0.8)
+    ax.bar(x_pos + w/2, incorrect_counts, w, label='Incorrect', color='tomato',    alpha=0.8)
+    for i, (c, e) in enumerate(zip(correct_counts, incorrect_counts)):
+        total = c + e
+        acc = c / total * 100 if total > 0 else 0
+        ax.text(i, max(c, e) + total * 0.01, f'{acc:.1f}%',
+                ha='center', va='bottom', fontsize=8, fontweight='bold')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(tiers, fontsize=9)
+    ax.set_ylabel('ZMW count', fontsize=8)
+    ax.set_title('Correct vs Incorrect by Tier', fontsize=9)
+    ax.legend(fontsize=8)
+    ax.grid(True, axis='y', alpha=0.3)
+
+    # ── [1,1] Model calibration ───────────────────────────────────────────────
+    ax = fig.add_subplot(gs[1, 1])
+    bin_edges = np.linspace(0, 1, 11)
+    bin_centres, bin_acc, bin_n = [], [], []
+    for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
+        mask = (probs >= lo) & (probs < hi)
+        if mask.sum() > 0:
+            bin_centres.append((lo + hi) / 2)
+            bin_acc.append(y[mask].mean())
+            bin_n.append(mask.sum())
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=1, alpha=0.5, label='Perfect calibration')
+    sc = ax.scatter(bin_centres, bin_acc, c=bin_n, cmap='Blues',
+                    s=80, zorder=5, edgecolors='steelblue', linewidths=0.8)
+    plt.colorbar(sc, ax=ax, label='n ZMWs', fraction=0.046, pad=0.04)
+    ax.set_xlabel('Model Predicted Probability (correct)', fontsize=8)
+    ax.set_ylabel('Actual Fraction Correct', fontsize=8)
+    ax.set_title('Model Calibration', fontsize=9)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    ax.legend(fontsize=7)
+    ax.grid(True, alpha=0.3)
+
+    out_path = f'{output_prefix}_model_diagnostics.png'
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {out_path}")
+
+
+def plot_weight_sensitivity(training_data, recommended_weights, output_prefix):
+    """
+    Plot 1: Weight sensitivity sweep.
+
+    Simulate what happens to accuracy and yield as INF_WEIGHT,
+    MAX_UNINF_WEIGHT, and EXTRANEOUS_PENALTY each vary around their
+    recommended values, holding the other two fixed.  This shows the
+    shape of the loss landscape and how robust the recommendation is.
+
+    We approximate the Bayesian score for each ZMW directly from the
+    stored inf/uninf/extr counts rather than re-running the full scorer,
+    which is fast and sufficient for relative comparison.
+    """
+    rec = recommended_weights
+    inf_ref   = rec.get('INF_WEIGHT', 1.0)
+    uninf_ref = rec.get('MAX_UNINF_WEIGHT', 0.2)
+    extr_ref  = rec.get('EXTRANEOUS_PENALTY', -0.10)
+
+    # Build a minimal per-ZMW table of counts and ground truth
+    records = []
+    for d in training_data:
+        records.append({
+            'n_inf':   d['n_inf'],
+            'n_uninf': d['n_uninf'],
+            'n_extr':  d['n_extr'],
+            'correct': d['label'],
+            'cls':     d['classification'],
+        })
+    df = pd.DataFrame(records)
+    n_total = len(df)
+
+    def score_and_eval(inf_w, uninf_w, extr_w):
+        """Return (accuracy_hc, pct_kept_hc) at current HC threshold using given weights."""
+        raw = df['n_inf'] * inf_w + df['n_uninf'] * uninf_w + df['n_extr'] * extr_w
+        # Approx posterior: softmax with 1 competitor at score=0 (worst case)
+        # posterior ≈ exp(raw) / (exp(raw) + exp(0))  → sigmoid
+        posterior = 1 / (1 + np.exp(-raw))
+        hc_mask = (posterior >= 0.840) & (df['cls'] == 'HIGH_CONF')
+        kept = df[hc_mask]
+        if len(kept) == 0:
+            return np.nan, 0.0
+        return kept['correct'].mean() * 100, len(kept) / n_total * 100
+
+    # Sweep ranges: ±50% around recommended, 30 steps each
+    sweeps = {
+        'INF_WEIGHT':          np.linspace(max(0.1, inf_ref * 0.5),   inf_ref * 1.5,   30),
+        'MAX_UNINF_WEIGHT':    np.linspace(max(0.01, uninf_ref * 0.5), uninf_ref * 1.5, 30),
+        'EXTRANEOUS_PENALTY':  np.linspace(extr_ref * 1.5,  min(-0.01, extr_ref * 0.5), 30),
+    }
+
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    fig.suptitle('Weight Sensitivity Sweep\n'
+                 '(each weight varied ±50% while others held at recommended value)',
+                 fontsize=12, fontweight='bold')
+
+    param_labels = {
+        'INF_WEIGHT':         ('INF_WEIGHT', inf_ref,   'steelblue'),
+        'MAX_UNINF_WEIGHT':   ('MAX_UNINF_WEIGHT', uninf_ref, 'darkorange'),
+        'EXTRANEOUS_PENALTY': ('EXTRANEOUS_PENALTY', extr_ref, 'firebrick'),
+    }
+
+    for col, (param, (label, ref_val, color)) in enumerate(param_labels.items()):
+        vals = sweeps[param]
+        accs, yields = [], []
+        for v in vals:
+            iw = v        if param == 'INF_WEIGHT'         else inf_ref
+            uw = v        if param == 'MAX_UNINF_WEIGHT'   else uninf_ref
+            ew = v        if param == 'EXTRANEOUS_PENALTY' else extr_ref
+            acc, yld = score_and_eval(iw, uw, ew)
+            accs.append(acc)
+            yields.append(yld)
+
+        accs   = np.array(accs)
+        yields = np.array(yields)
+
+        # Accuracy row
+        ax = axes[0, col]
+        ax.plot(vals, accs, color=color, linewidth=2)
+        ax.axvline(ref_val, color='black', linestyle='--', linewidth=1,
+                   label=f'Recommended ({ref_val:.3f})')
+        ax.set_xlabel(label, fontsize=9)
+        ax.set_ylabel('HC Accuracy (%)', fontsize=9)
+        ax.set_title(f'Accuracy vs {label}', fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Yield row
+        ax = axes[1, col]
+        ax.plot(vals, yields, color=color, linewidth=2)
+        ax.axvline(ref_val, color='black', linestyle='--', linewidth=1)
+        ax.set_xlabel(label, fontsize=9)
+        ax.set_ylabel('HC Yield (%)', fontsize=9)
+        ax.set_title(f'Yield vs {label}', fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out_path = f'{output_prefix}_weight_sensitivity.png'
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {out_path}")
+
+
+def plot_error_anatomy(training_data, output_prefix):
+    """
+    Plot 2: Error anatomy breakdown per library/pool.
+
+    For each source pool, show a stacked bar of HIGH_CONF errors broken
+    down by likely cause:
+      - Low informative count  (n_inf < 2)
+      - High extraneous count  (n_extr > n_inf)
+      - Ambiguous (uninf dominates: n_uninf > n_inf and n_extr <= n_inf)
+      - Other / unexplained
+
+    Correct HIGH_CONF calls shown as a separate bar for reference scale.
+    """
+    # Categorise errors
+    records = []
+    for d in training_data:
+        if d['classification'] != 'HIGH_CONF':
+            continue
+        n_inf, n_uninf, n_extr = d['n_inf'], d['n_uninf'], d['n_extr']
+        correct = bool(d['label'])
+        if correct:
+            cause = 'correct'
+        elif n_inf < 2:
+            cause = 'low_inf'
+        elif n_extr > n_inf:
+            cause = 'extr_dominated'
+        elif n_uninf > n_inf:
+            cause = 'uninf_dominated'
+        else:
+            cause = 'other'
+        records.append({'pool': d['pool'], 'cause': cause})
+
+    if not records:
+        print("  Skipping error anatomy plot: no HIGH_CONF data")
+        return
+
+    df = pd.DataFrame(records)
+    pools = sorted(df['pool'].unique())
+    causes = ['correct', 'low_inf', 'extr_dominated', 'uninf_dominated', 'other']
+    cause_colors = {
+        'correct':        'steelblue',
+        'low_inf':        '#F4A261',
+        'extr_dominated': '#E63946',
+        'uninf_dominated':'#9B5DE5',
+        'other':          '#AAAAAA',
+    }
+    cause_labels = {
+        'correct':        'Correct',
+        'low_inf':        'Error: low informative count (n_inf < 2)',
+        'extr_dominated': 'Error: extraneous dominant (n_extr > n_inf)',
+        'uninf_dominated':'Error: uninformative dominant (n_uninf > n_inf)',
+        'other':          'Error: other',
+    }
+
+    counts = df.groupby(['pool', 'cause']).size().unstack(fill_value=0)
+    for c in causes:
+        if c not in counts.columns:
+            counts[c] = 0
+    counts = counts[causes].reindex(pools, fill_value=0)
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    fig.suptitle('HIGH_CONF Error Anatomy by Pool', fontsize=13, fontweight='bold')
+
+    # Absolute counts
+    ax = axes[0]
+    bottom = np.zeros(len(pools))
+    x_pos = np.arange(len(pools))
+    for cause in causes:
+        vals = counts[cause].values.astype(float)
+        ax.bar(x_pos, vals, bottom=bottom, color=cause_colors[cause],
+               label=cause_labels[cause], alpha=0.85)
+        bottom += vals
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([p.replace('_KN_', '\n') for p in pools], fontsize=8)
+    ax.set_ylabel('ZMW count')
+    ax.set_title('Absolute counts')
+    ax.legend(fontsize=7, loc='upper right')
+    ax.grid(True, axis='y', alpha=0.3)
+
+    # Fraction of errors only (exclude correct bar)
+    ax = axes[1]
+    error_causes = [c for c in causes if c != 'correct']
+    err_counts = counts[error_causes].copy()
+    err_totals = err_counts.sum(axis=1).replace(0, np.nan)
+    err_frac = err_counts.div(err_totals, axis=0).fillna(0)
+
+    bottom = np.zeros(len(pools))
+    for cause in error_causes:
+        vals = err_frac[cause].values
+        bars = ax.bar(x_pos, vals, bottom=bottom, color=cause_colors[cause],
+                      label=cause_labels[cause], alpha=0.85)
+        # Annotate non-trivial fractions
+        for xi, (v, b) in enumerate(zip(vals, bottom)):
+            if v > 0.08:
+                ax.text(xi, b + v / 2, f'{v*100:.0f}%',
+                        ha='center', va='center', fontsize=7, color='white', fontweight='bold')
+        bottom += vals
+    # Annotate total error count above each bar
+    for xi, total in enumerate(err_totals.fillna(0).astype(int)):
+        ax.text(xi, 1.01, f'n={total}', ha='center', va='bottom', fontsize=7)
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([p.replace('_KN_', '\n') for p in pools], fontsize=8)
+    ax.set_ylabel('Fraction of errors')
+    ax.set_ylim(0, 1.12)
+    ax.set_title('Error type breakdown (fraction)')
+    ax.legend(fontsize=7, loc='upper right')
+    ax.grid(True, axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    out_path = f'{output_prefix}_error_anatomy.png'
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {out_path}")
+
+
+def plot_inf_uninf_scatter(training_data, output_prefix):
+    """
+    Plot 3: Informative vs uninformative barcode count scatter.
+
+    Each ZMW is a point at (n_uninf, n_inf), coloured by correctness.
+    Incorrect assignments clustering in the high-uninf / low-inf region
+    indicate MAX_UNINF_WEIGHT is too permissive.
+
+    Separate panels for HIGH_CONF and LOW_CONF.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig.suptitle('Informative vs Uninformative Barcode Counts by Correctness',
+                 fontsize=12, fontweight='bold')
+
+    for ax, tier in zip(axes, ['HIGH_CONF', 'LOW_CONF']):
+        sub = [d for d in training_data if d['classification'] == tier]
+        if not sub:
+            ax.set_visible(False)
+            continue
+
+        n_uninf = np.array([d['n_uninf'] for d in sub])
+        n_inf   = np.array([d['n_inf']   for d in sub])
+        correct = np.array([d['label']   for d in sub], dtype=bool)
+
+        # Jitter slightly so overlapping points are visible
+        jitter = 0.15
+        rng = np.random.default_rng(42)
+        jx = rng.uniform(-jitter, jitter, size=len(n_uninf))
+        jy = rng.uniform(-jitter, jitter, size=len(n_inf))
+
+        ax.scatter(n_uninf[correct]  + jx[correct],
+                   n_inf[correct]    + jy[correct],
+                   c='steelblue', alpha=0.25, s=8, label='Correct', rasterized=True)
+        ax.scatter(n_uninf[~correct] + jx[~correct],
+                   n_inf[~correct]   + jy[~correct],
+                   c='tomato', alpha=0.6, s=12, label='Incorrect', rasterized=True)
+
+        # Reference lines: y = x (inf == uninf) and y = 2x
+        max_val = max(n_uninf.max(), n_inf.max()) + 1
+        xs = np.array([0, max_val])
+        ax.plot(xs, xs,       'k--', linewidth=0.8, alpha=0.5, label='inf = uninf')
+        ax.plot(xs, xs * 2,   'k:',  linewidth=0.8, alpha=0.4, label='inf = 2× uninf')
+
+        n_err = int((~correct).sum())
+        n_tot = len(sub)
+        ax.set_xlabel('Uninformative Barcode Count', fontsize=9)
+        ax.set_ylabel('Informative Barcode Count', fontsize=9)
+        ax.set_title(f'{tier}  (n={n_tot:,}, {n_err} errors)', fontsize=10)
+        ax.legend(fontsize=8, markerscale=2)
+        ax.grid(True, alpha=0.2)
+
+    plt.tight_layout()
+    out_path = f'{output_prefix}_inf_uninf_scatter.png'
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {out_path}")
+
+
+def plot_per_pool_accuracy(training_data, output_prefix):
+    """
+    Plot 4: Per-pool accuracy summary.
+
+    Grouped bar chart: for each training pool, show accuracy for
+    HIGH_CONF and LOW_CONF separately, with n= annotated.
+    Lets you see whether weight changes help representative pools
+    or only stress-test pools.
+    """
+    records = []
+    for d in training_data:
+        records.append({
+            'pool': d['pool'],
+            'cls':  d['classification'],
+            'correct': d['label'],
+        })
+    df = pd.DataFrame(records)
+
+    pools = sorted(df['pool'].unique())
+    tiers = ['HIGH_CONF', 'LOW_CONF']
+    tier_colors = {'HIGH_CONF': 'steelblue', 'LOW_CONF': 'darkorange'}
+
+    x_pos  = np.arange(len(pools))
+    width  = 0.35
+    offsets = {'HIGH_CONF': -width / 2, 'LOW_CONF': width / 2}
+
+    fig, ax = plt.subplots(figsize=(max(8, len(pools) * 1.8), 6))
+    fig.suptitle('Per-Pool Accuracy by Confidence Tier', fontsize=12, fontweight='bold')
+
+    for tier in tiers:
+        accs, ns = [], []
+        for pool in pools:
+            sub = df[(df['pool'] == pool) & (df['cls'] == tier)]
+            accs.append(sub['correct'].mean() * 100 if len(sub) > 0 else np.nan)
+            ns.append(len(sub))
+
+        bars = ax.bar(x_pos + offsets[tier], accs, width,
+                      label=tier, color=tier_colors[tier], alpha=0.8)
+        for xi, (acc, n) in enumerate(zip(accs, ns)):
+            if not np.isnan(acc):
+                ax.text(xi + offsets[tier], acc + 0.2, f'{acc:.1f}%\nn={n:,}',
+                        ha='center', va='bottom', fontsize=7)
+
+    ax.axhline(99.9, color='red',  linestyle='--', linewidth=1, alpha=0.6, label='99.9% target')
+    ax.axhline(95.0, color='gray', linestyle=':', linewidth=1, alpha=0.6, label='95% (LC target)')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([p.replace('_KN_', '\n') for p in pools], fontsize=8)
+    ax.set_ylabel('Accuracy (%)')
+    ax.set_ylim([max(0, df.groupby(['pool','cls'])['correct'].mean().min() * 100 - 5), 101])
+    ax.legend(fontsize=9)
+    ax.grid(True, axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    out_path = f'{output_prefix}_per_pool_accuracy.png'
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {out_path}")
+
+
+def plot_score_separation(training_data, output_prefix):
+    """
+    Plot 5: Score separation — posterior gap between top and second-best library.
+
+    The posterior of the best library is p1; by the softmax identity, the
+    remaining probability mass (1 - p1) is shared among all other libraries.
+    With N libraries the expected second-best is (1 - p1) / (N - 1), giving:
+
+        gap = p1 - (1 - p1) / (N - 1)
+
+    With only 2 libraries this simplifies to gap = 2*p1 - 1.
+
+    A well-tuned weight set should produce a bimodal gap distribution:
+    correct assignments cluster at large gap, errors at small gap.
+    """
+    # Infer N_libraries per ZMW from the pool: count unique 'true' values per pool
+    pool_n_libs: dict[str, int] = {}
+    from collections import Counter
+    pool_libs_counter: dict[str, set] = defaultdict(set)
+    for d in training_data:
+        pool_libs_counter[d['pool']].add(d['true'])
+    for pool, libs in pool_libs_counter.items():
+        pool_n_libs[pool] = max(2, len(libs))  # at least 2 to avoid div/0
+
+    gaps, correct_arr, tier_arr = [], [], []
+    for d in training_data:
+        p1 = d['posterior']
+        n  = pool_n_libs.get(d['pool'], 2)
+        gap = p1 - (1 - p1) / max(n - 1, 1)
+        gaps.append(gap)
+        correct_arr.append(d['label'])
+        tier_arr.append(d['classification'])
+
+    gaps      = np.array(gaps)
+    correct   = np.array(correct_arr, dtype=bool)
+    tiers     = np.array(tier_arr)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig.suptitle('Score Separation: Posterior Gap (top vs second-best library)',
+                 fontsize=12, fontweight='bold')
+
+    bins = np.linspace(gaps.min(), 1.0, 60)
+
+    for ax, tier in zip(axes, ['HIGH_CONF', 'LOW_CONF']):
+        mask = tiers == tier
+        g_corr = gaps[mask &  correct]
+        g_err  = gaps[mask & ~correct]
+
+        ax.hist(g_corr, bins=bins, alpha=0.55, color='steelblue',
+                label=f'Correct (n={len(g_corr):,})',   density=True)
+        ax.hist(g_err,  bins=bins, alpha=0.65, color='tomato',
+                label=f'Incorrect (n={len(g_err):,})', density=True)
+
+        # Mark median of each group
+        if len(g_corr) > 0:
+            ax.axvline(np.median(g_corr), color='steelblue', linestyle='--',
+                       linewidth=1.5, label=f'Median correct ({np.median(g_corr):.2f})')
+        if len(g_err) > 0:
+            ax.axvline(np.median(g_err), color='tomato', linestyle='--',
+                       linewidth=1.5, label=f'Median incorrect ({np.median(g_err):.2f})')
+
+        ax.set_xlabel('Posterior Gap  p₁ − (1−p₁)/(N−1)', fontsize=9)
+        ax.set_ylabel('Density', fontsize=9)
+        ax.set_title(tier, fontsize=11)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out_path = f'{output_prefix}_score_separation.png'
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {out_path}")
 
 
 def main():
@@ -376,6 +911,10 @@ def main():
                         help='Ground truth lookup files (can use wildcards)')
     parser.add_argument('--output', default='optimized_weights.json',
                         help='Output file for recommended weights')
+    parser.add_argument('--plot-prefix', default=None,
+                        help='Prefix for output plot (e.g. results/weights). '
+                             'Produces <prefix>_weight_analysis.png. '
+                             'Defaults to the output path with .json stripped.')
     parser.add_argument('--model', choices=['logistic', 'random_forest'], default='logistic',
                         help='ML model type (logistic is more interpretable)')
     
@@ -419,7 +958,17 @@ def main():
     
     # Extract recommendations
     recommended_weights = extract_weight_recommendations(model, feature_names, args.model)
-    
+
+    # Plot diagnostic figures
+    plot_prefix = args.plot_prefix or str(Path(args.output).with_suffix(''))
+    print("\nGenerating plots...")
+    plot_model_diagnostics(model, feature_names, training_data, args.model, plot_prefix)
+    plot_weight_sensitivity(training_data, recommended_weights, plot_prefix)
+    plot_error_anatomy(training_data, plot_prefix)
+    plot_inf_uninf_scatter(training_data, plot_prefix)
+    plot_per_pool_accuracy(training_data, plot_prefix)
+    plot_score_separation(training_data, plot_prefix)
+
     # Save results
     output_data = {
         'recommended_weights': recommended_weights,
@@ -434,10 +983,11 @@ def main():
         json.dump(output_data, f, indent=2)
     
     print(f"\nResults saved to {args.output}")
-    print(f"\nTo use these weights, update the constants at the top of assign_kinnex.py:")
+    print(f"\nTo use these weights, update your assign_kinnex script:")
     print(f"  INF_WEIGHT = {recommended_weights['INF_WEIGHT']}")
     print(f"  MAX_UNINF_WEIGHT = {recommended_weights['MAX_UNINF_WEIGHT']:.3f}")
-    print(f"  EXTRANEOUS_PENALTY = {recommended_weights['EXTRANEOUS_PENALTY']:.3f}")
+    print(f"  # And change line with 'score -= 1.0' to:")
+    print(f"  score += {recommended_weights['EXTRANEOUS_PENALTY']:.3f}  # (was -1.0)")
 
 
 if __name__ == '__main__':
