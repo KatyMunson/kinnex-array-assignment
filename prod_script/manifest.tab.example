@@ -1,11 +1,38 @@
 # Production manifest for Snakefile
-# Columns: sample  KN_BC  bam_path  arrays_path
-# Tab-separated, no header line, lines starting with # are ignored
+# Columns (tab-separated, no required header, # lines ignored):
 #
-# sample      — unique identifier for this pool/kinnex-barcode combination
+#   sample        KN_BC       bam_path             arrays_path       [mode]
+#
+# sample      — unique identifier for this pool / KN_BC combination
 # KN_BC       — Kinnex barcode (e.g. bcM0003)
 # bam_path    — path to pre-Skera CCS/HiFi BAM
-# arrays_path — path to arrays.txt for this pool
+# arrays_path — path to arrays file for this run (may be a master file
+#               covering all KN_BCs on the SMRT Cell; the pipeline subsets
+#               by KN_BC automatically)
+# mode        — OPTIONAL 5th column: "single" or "multi"
+#               Overrides auto-detection. Omit to let the pipeline decide
+#               based on library count in the arrays file.
 #
-# Example:
-# Pool001_bcM0003	bcM0003	/path/to/Pool001.ccs.bam	arrays/Pool001_bcM0003.txt
+# ── Mode auto-detection ──────────────────────────────────────────────────────
+# When the mode column is absent, the pipeline counts libraries sharing this
+# KN_BC in the arrays file:
+#   1 library  → SINGLE-LIBRARY (Skera BAM passed directly as HIGH_CONF)
+#   >1 library → MULTI-LIBRARY  (full Bayesian array assignment pipeline)
+# The detected mode is logged at startup so the decision is always visible.
+#
+# ── Mode override cross-validation ──────────────────────────────────────────
+# mode=multi, 1 library found   → WARNING, proceeds through assignment path
+# mode=single, 1 library found  → proceeds as single-library (agrees)
+# mode=multi, >1 libraries found → proceeds as multi-library (agrees)
+# mode=single, >1 libraries found → ERROR (library name is ambiguous)
+#
+# ── Mixed-mode example ───────────────────────────────────────────────────────
+# The following lines show a SMRT Cell with 4 KN_BCs:
+#   - bcM0003 and bcM0004 have 2 libraries each → MULTI-LIBRARY (auto)
+#   - bcM0005 has 1 library                     → SINGLE-LIBRARY (auto)
+#   - bcM0006 has 1 library but forced to multi  → MULTI-LIBRARY (override)
+#
+# Pool001_bcM0003	bcM0003	/path/to/Pool001.ccs.bam	arrays/SmrtCell01_master.txt
+# Pool001_bcM0004	bcM0004	/path/to/Pool001.ccs.bam	arrays/SmrtCell01_master.txt
+# Pool001_bcM0005	bcM0005	/path/to/Pool001.ccs.bam	arrays/SmrtCell01_master.txt
+# Pool001_bcM0006	bcM0006	/path/to/Pool001.ccs.bam	arrays/SmrtCell01_master.txt	multi

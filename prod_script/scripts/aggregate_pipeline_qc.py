@@ -2,8 +2,18 @@
 """
 aggregate_pipeline_qc.py
 
-Aggregates QC metrics across all pipeline stages (Skera, Lima, assignment,
-split, refine) into per-stage TSV files and a summary Excel workbook.
+Aggregates QC metrics across all pipeline stages (Skera, Lima pass 1,
+assignment, split, Lima pass 2, refine) into per-stage TSV files and a
+formatted Excel workbook.
+
+Handles both single-library and multi-library samples in the same run.
+Single-library samples have no Lima pass 1, assignment, or split data;
+those columns appear as blank/None for those rows. All samples have Skera,
+Lima pass 2, refine, and summary data.
+
+A processing_mode column (SINGLE-LIBRARY / MULTI-LIBRARY) is added to the
+Refine tab and propagated to the Summary tab to make the per-sample
+processing decision visible in the workbook.
 
 Usage: python aggregate_pipeline_qc.py <results_dir> <manifest> <out_dir>
 
@@ -23,26 +33,37 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
+# utils.py lives in the same scripts/ directory
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import utils
+
 results_dir = Path(sys.argv[1])
 manifest    = Path(sys.argv[2])
 out_dir     = Path(sys.argv[3])
 out_dir.mkdir(parents=True, exist_ok=True)
 
-# ── Load manifest ──────────────────────────────────────────────────────────────
-samples = []
-arrays_files = {}
-with open(manifest) as f:
-    for line in f:
-        if line.strip() and not line.startswith("#"):
-            fields = line.strip().split("\t")
-            sample, knbc, bam, arrays = fields[0], fields[1], fields[2], fields[3]
-            samples.append(sample)
-            arrays_files[sample] = arrays
+# ── Load manifest and resolve modes ───────────────────────────────────────────
+# parse_manifest performs mode resolution and logs decisions, matching what
+# the Snakefile did at submission time. This ensures the QC report reflects
+# the same mode decisions as the pipeline run.
+_mf = utils.parse_manifest(manifest)
+
+samples      = _mf["samples"]
+arrays_files = _mf["array_files"]
+modes        = _mf["modes"]        # { sample: "single" | "multi" }
+libraries    = _mf["libraries"]    # { sample: [lib_name, ...] }
+
+def mode_label(sample):
+    """Return human-readable processing mode for Excel display."""
+    return "SINGLE-LIBRARY" if modes.get(sample) == utils.SINGLE else "MULTI-LIBRARY"
 
 print(f"Samples: {samples}")
 
+
+# ── Helper functions ───────────────────────────────────────────────────────────
+
 def load_arrays(arrays_path):
-    """Return dict of library -> set of expected barcodes."""
+    """Return dict of library -> set of expected barcodes from an arrays file."""
     expected = {}
     try:
         with open(arrays_path) as f:
@@ -55,8 +76,9 @@ def load_arrays(arrays_path):
         print(f"WARNING: Could not parse arrays file {arrays_path}: {e}")
     return expected
 
+
 def parse_lima_counts(counts_path):
-    """Return dict of IdxFirstNamed -> (Counts, MeanScore)."""
+    """Return dict of IdxFirstNamed -> (Counts, MeanScore) from a lima.counts file."""
     result = {}
     try:
         df = pd.read_csv(counts_path, sep="\t")
@@ -67,12 +89,8 @@ def parse_lima_counts(counts_path):
     return result
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Stage parsers
-# ══════════════════════════════════════════════════════════════════════════════
-
 def parse_skera_summary(summary_path):
-    """Parse a .skera.summary.csv file into a dict."""
+    """Parse a .skera.summary.csv file into a dict of key -> value strings."""
     metrics = {}
     try:
         with open(summary_path) as f:
@@ -84,8 +102,9 @@ def parse_skera_summary(summary_path):
         pass
     return metrics
 
+
 def parse_lima_summary(summary_path):
-    """Parse a .lima.summary file into a dict of key metrics."""
+    """Parse a .lima.summary file into a dict of key -> value strings."""
     metrics = {}
     try:
         with open(summary_path) as f:
@@ -98,16 +117,24 @@ def parse_lima_summary(summary_path):
         pass
     return metrics
 
-def parse_lima_report_barcodes(report_path):
-    """Return set of barcodes with PassedFilters=1 from a lima report."""
-    try:
-        df = pd.read_csv(report_path, sep="\t", usecols=["IdxFirstNamed", "PassedFilters"])
-        return set(df.loc[df.PassedFilters == 1, "IdxFirstNamed"].unique())
-    except Exception:
-        return set()
+
+def get_row(df, sample):
+    """Return first matching row for a sample, or None if not found."""
+    if df is None or len(df) == 0:
+        return None
+    rows = df.loc[df["sample"] == sample]
+    return rows.iloc[0] if len(rows) else None
+
+
+def get_rows(df, sample):
+    """Return all rows for a sample as a DataFrame."""
+    if df is None or len(df) == 0:
+        return pd.DataFrame()
+    return df.loc[df["sample"] == sample]
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Stage 1: Skera
+# Stage 1: Skera — all samples
 # ══════════════════════════════════════════════════════════════════════════════
 print("Parsing skera...")
 skera_rows = []
@@ -115,25 +142,29 @@ for s in samples:
     summary_path = results_dir / "skera" / f"{s}.skera.summary.csv"
     m = parse_skera_summary(summary_path)
     skera_rows.append({
-        "sample":                  s,
-        "input_reads":             int(m.get("Input Reads", 0)),
-        "segmented_reads":         int(m.get("Segmented Reads (S-Reads)", 0)),
-        "mean_sread_length":       float(m.get("Mean Length of S-Reads", 0)),
-        "pct_full_array":          float(m.get("Percentage of Reads with Full Array", 0)),
-        "mean_array_size":         float(m.get("Mean Array Size (Concatenation Factor)", 0)),
+        "sample":            s,
+        "processing_mode":   mode_label(s),
+        "input_reads":       int(m.get("Input Reads", 0)),
+        "segmented_reads":   int(m.get("Segmented Reads (S-Reads)", 0)),
+        "mean_sread_length": float(m.get("Mean Length of S-Reads", 0)),
+        "pct_full_array":    float(m.get("Percentage of Reads with Full Array", 0)),
+        "mean_array_size":   float(m.get("Mean Array Size (Concatenation Factor)", 0)),
     })
 
 df_skera = pd.DataFrame(skera_rows)
 df_skera.to_csv(out_dir / "qc_skera.tsv", sep="\t", index=False)
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Stage 2: Lima pass 1
+# Stage 2: Lima pass 1 — multi-library samples only
+# Single-library samples have no Lima pass 1 and are omitted from this tab.
 # ══════════════════════════════════════════════════════════════════════════════
-print("Parsing lima pass 1...")
-lima1_rows = []
+print("Parsing lima pass 1 (multi-library samples only)...")
+lima1_rows    = []
 lima1_bc_rows = []
-for s in samples:
-    lima_dir = results_dir / "lima" / s
+
+for s in [s for s in samples if modes[s] == utils.MULTI]:
+    lima_dir      = results_dir / "lima" / s
     summary_files = glob.glob(str(lima_dir / "*.lima.summary"))
     counts_files  = glob.glob(str(lima_dir / "*.lima.counts"))
     if not summary_files:
@@ -156,7 +187,6 @@ for s in samples:
         "barcodes":          ",".join(sorted(detected)),
     })
 
-    # Per-barcode counts for lima1
     for bc, (cnt, score) in sorted(counts.items()):
         if bc == "IsoSeqX_3p":
             continue
@@ -167,36 +197,37 @@ for s in samples:
             "mean_score": score,
         })
 
-df_lima1 = pd.DataFrame(lima1_rows)
+df_lima1    = pd.DataFrame(lima1_rows)    if lima1_rows    else pd.DataFrame()
+df_lima1_bc = pd.DataFrame(lima1_bc_rows) if lima1_bc_rows else pd.DataFrame()
 df_lima1.to_csv(out_dir / "qc_lima1.tsv", sep="\t", index=False)
-df_lima1_bc = pd.DataFrame(lima1_bc_rows)
 df_lima1_bc.to_csv(out_dir / "qc_lima1_barcodes.tsv", sep="\t", index=False)
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Stage 3: Assign arrays
+# Stage 3: Array assignment — multi-library samples only
 # ══════════════════════════════════════════════════════════════════════════════
-print("Parsing assign...")
-assign_rows  = []
+print("Parsing array assignment (multi-library samples only)...")
+assign_rows     = []
 assign_lib_rows = []
 
-for s in samples:
+for s in [s for s in samples if modes[s] == utils.MULTI]:
     assign_file = results_dir / "assigned" / f"{s}.txt"
     if not assign_file.exists():
         continue
-    df = pd.read_csv(assign_file, sep="\t", comment='#')
+    df = utils.load_assignments_df(assign_file)
     cls_counts = df["Classification"].value_counts().to_dict()
     total_zmws = len(df)
 
     assign_rows.append({
-        "sample":          s,
-        "total_zmws":      total_zmws,
-        "HIGH_CONF":       cls_counts.get("HIGH_CONF", 0),
-        "LOW_CONF":        cls_counts.get("LOW_CONF", 0),
-        "UNASSIGNED":      cls_counts.get("UNASSIGNED", 0),
-        "pct_high_conf":   round(100 * cls_counts.get("HIGH_CONF", 0) / total_zmws, 2) if total_zmws else None,
+        "sample":        s,
+        "total_zmws":    total_zmws,
+        "HIGH_CONF":     cls_counts.get("HIGH_CONF", 0),
+        "LOW_CONF":      cls_counts.get("LOW_CONF", 0),
+        "UNASSIGNED":    cls_counts.get("UNASSIGNED", 0),
+        "pct_high_conf": round(100 * cls_counts.get("HIGH_CONF", 0) / total_zmws, 2)
+                         if total_zmws else None,
     })
 
-    # Per-library breakdown
     hc = df[df["Classification"] == "HIGH_CONF"]
     for lib, grp in hc.groupby("Assigned_Array"):
         assign_lib_rows.append({
@@ -205,13 +236,16 @@ for s in samples:
             "zmw_count": len(grp),
         })
 
-df_assign     = pd.DataFrame(assign_rows)
-df_assign_lib = pd.DataFrame(assign_lib_rows)
+df_assign     = pd.DataFrame(assign_rows)     if assign_rows     else pd.DataFrame()
+df_assign_lib = pd.DataFrame(assign_lib_rows) if assign_lib_rows else pd.DataFrame()
 df_assign.to_csv(out_dir / "qc_assign.tsv", sep="\t", index=False)
 df_assign_lib.to_csv(out_dir / "qc_assign_by_library.tsv", sep="\t", index=False)
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Stage 4: Split skera
+# Stage 4: Split Skera — all samples
+# Single-library samples have a minimal split_skera_qc.tsv written by the
+# passthrough rule; it contains the library.HIGH_CONF read count only.
 # ══════════════════════════════════════════════════════════════════════════════
 print("Parsing split skera...")
 split_rows = []
@@ -230,21 +264,24 @@ for s in samples:
         else:
             library, confidence = key, "unknown"
         split_rows.append({
-            "sample":      s,
-            "library":     library,
-            "confidence":  confidence,
-            "read_count":  row["read_count"],
+            "sample":          s,
+            "processing_mode": mode_label(s),
+            "library":         library,
+            "confidence":      confidence,
+            "read_count":      row["read_count"],
         })
 
-df_split = pd.DataFrame(split_rows)
+df_split = pd.DataFrame(split_rows) if split_rows else pd.DataFrame()
 df_split.to_csv(out_dir / "qc_split_skera.tsv", sep="\t", index=False)
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Stage 5: Lima pass 2
+# Stage 5: Lima pass 2 — all samples
 # ══════════════════════════════════════════════════════════════════════════════
 print("Parsing lima pass 2...")
-lima2_rows = []
+lima2_rows    = []
 lima2_bc_rows = []
+
 for s in samples:
     lima2_base = results_dir / "lima2" / s
     if not lima2_base.exists():
@@ -253,12 +290,12 @@ for s in samples:
     for lib_dir in sorted(lima2_base.iterdir()):
         if not lib_dir.is_dir():
             continue
-        lib = lib_dir.name
+        lib      = lib_dir.name
         expected = expected_by_lib.get(lib, set())
         for conf_dir in sorted(lib_dir.iterdir()):
             if not conf_dir.is_dir():
                 continue
-            conf = conf_dir.name
+            conf          = conf_dir.name
             summary_files = glob.glob(str(conf_dir / "*.lima.summary"))
             counts_files  = glob.glob(str(conf_dir / "*.lima.counts"))
             if not summary_files:
@@ -269,13 +306,13 @@ for s in samples:
             reads_in   = int(re.sub(r"[^\d]", "", m.get("Reads input", "0")) or 0)
             reads_pass = int(re.sub(r"[^\d]", "", m.get("Reads above all thresholds (A)", "0")) or 0)
             reads_fail = reads_in - reads_pass
-
             detected   = {bc for bc in counts if bc != "IsoSeqX_3p"}
             unexpected = detected - expected
             missing    = expected - detected
 
             lima2_rows.append({
                 "sample":              s,
+                "processing_mode":     mode_label(s),
                 "library":             lib,
                 "confidence":          conf,
                 "reads_in":            reads_in,
@@ -294,35 +331,41 @@ for s in samples:
                 if bc == "IsoSeqX_3p":
                     continue
                 lima2_bc_rows.append({
-                    "sample":     s,
-                    "library":    lib,
-                    "confidence": conf,
-                    "barcode":    bc,
-                    "reads":      cnt,
-                    "mean_score": score,
-                    "expected":   bc in expected,
+                    "sample":          s,
+                    "processing_mode": mode_label(s),
+                    "library":         lib,
+                    "confidence":      conf,
+                    "barcode":         bc,
+                    "reads":           cnt,
+                    "mean_score":      score,
+                    "expected":        bc in expected,
                 })
 
-df_lima2 = pd.DataFrame(lima2_rows)
+df_lima2    = pd.DataFrame(lima2_rows)    if lima2_rows    else pd.DataFrame()
+df_lima2_bc = pd.DataFrame(lima2_bc_rows) if lima2_bc_rows else pd.DataFrame()
 df_lima2.to_csv(out_dir / "qc_lima2.tsv", sep="\t", index=False)
-df_lima2_bc = pd.DataFrame(lima2_bc_rows)
 df_lima2_bc.to_csv(out_dir / "qc_lima2_barcodes.tsv", sep="\t", index=False)
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Stage 6: Refine (FLNC)
+# Stage 6: Refine (FLNC) — all samples
+# processing_mode is the primary column where the single/multi decision is
+# surfaced for the user; it appears here and in Summary.
 # ══════════════════════════════════════════════════════════════════════════════
 print("Parsing refine...")
 BARCODES = [f"bc{i:02d}" for i in range(1, 13)]
-# nested: sample -> library -> confidence -> barcode -> count
+
 refine_counts = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(int))))
 
-json_files = glob.glob(str(results_dir / "refine" / "*" / "*" / "*" / "*.flnc.filter_summary.report.json"))
+json_files = glob.glob(
+    str(results_dir / "refine" / "*" / "*" / "*" / "*.flnc.filter_summary.report.json")
+)
 for jf in sorted(json_files):
-    p = Path(jf)
-    sample     = p.parts[-4]
+    p          = Path(jf)
+    sample_    = p.parts[-4]
     library    = p.parts[-3]
     confidence = p.parts[-2]
-    match = re.search(r"_(bc\d{2})_", p.name)
+    match      = re.search(r"_(bc\d{2})_", p.name)
     if not match:
         continue
     bc = match.group(1)
@@ -330,97 +373,106 @@ for jf in sorted(json_files):
         data = json.load(f)
     for attr in data.get("attributes", []):
         if attr.get("id") == "num_reads_flnc_polya":
-            refine_counts[sample][library][confidence][bc] += attr["value"]
+            refine_counts[sample_][library][confidence][bc] += attr["value"]
 
 refine_rows = []
-for sample in sorted(refine_counts):
-    for library in sorted(refine_counts[sample]):
-        for confidence in sorted(refine_counts[sample][library]):
-            row = {"sample": sample, "library": library, "confidence": confidence}
+for sample_ in sorted(refine_counts):
+    for library in sorted(refine_counts[sample_]):
+        for confidence in sorted(refine_counts[sample_][library]):
+            row = {
+                "sample":          sample_,
+                "processing_mode": mode_label(sample_),
+                "library":         library,
+                "confidence":      confidence,
+            }
             for bc in BARCODES:
-                row[bc] = refine_counts[sample][library][confidence].get(bc, 0)
-            row["total_flnc"] = sum(refine_counts[sample][library][confidence].values())
+                row[bc] = refine_counts[sample_][library][confidence].get(bc, 0)
+            row["total_flnc"] = sum(refine_counts[sample_][library][confidence].values())
             refine_rows.append(row)
 
-df_refine = pd.DataFrame(refine_rows)
+df_refine = pd.DataFrame(refine_rows) if refine_rows else pd.DataFrame()
 df_refine.to_csv(out_dir / "qc_refine.tsv", sep="\t", index=False)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Master summary: read tracking across stages
-# ══════════════════════════════════════════════════════════════════════════════
-def get_row(df, sample):
-    """Safely get first row for a sample, returns None if not found."""
-    rows = df.loc[df["sample"] == sample]
-    return rows.iloc[0] if len(rows) else None
 
-def get_rows(df, sample):
-    """Safely get all rows for a sample."""
-    return df.loc[df["sample"] == sample]
-
+# ══════════════════════════════════════════════════════════════════════════════
+# Master summary: read tracking across all stages
+# ══════════════════════════════════════════════════════════════════════════════
 print("Building master summary...")
 summary_rows = []
+
 for s in samples:
-    sk     = get_row(df_skera,  s)
+    sk     = get_row(df_skera, s)
     sk_in  = sk["input_reads"]     if sk is not None else None
     sk_out = sk["segmented_reads"] if sk is not None else None
-    l1     = get_row(df_lima1,  s)
-    a      = get_row(df_assign, s)
+
+    l1 = get_row(df_lima1, s) if len(df_lima1) > 0 else None
+    a  = get_row(df_assign, s) if len(df_assign) > 0 else None
 
     sp               = get_rows(df_split, s)
-    sp_highconf      = sp.loc[(sp["library"] != "unassigned") & (sp["confidence"] == "highconf")]
-    sp_lowconf       = sp.loc[(sp["library"] != "unassigned") & (sp["confidence"] == "lowconf")]
-    sp_unassigned    = sp.loc[sp["library"] == "unassigned"]
+    sp_highconf      = sp.loc[(sp["library"] != "unassigned") & (sp["confidence"] == "highconf")] if len(sp) else pd.DataFrame()
+    sp_lowconf       = sp.loc[(sp["library"] != "unassigned") & (sp["confidence"] == "lowconf")]  if len(sp) else pd.DataFrame()
+    sp_unassigned    = sp.loc[sp["library"] == "unassigned"] if len(sp) else pd.DataFrame()
     split_highconf   = int(sp_highconf["read_count"].sum())   if len(sp_highconf)   else None
     split_lowconf    = int(sp_lowconf["read_count"].sum())    if len(sp_lowconf)    else None
     split_unassigned = int(sp_unassigned["read_count"].sum()) if len(sp_unassigned) else None
     split_total      = (split_highconf or 0) + (split_lowconf or 0) + (split_unassigned or 0)
-    split_pct_assigned = round(100 * ((split_highconf or 0) + (split_lowconf or 0)) / split_total, 2) if split_total else None
+    split_pct_assigned = (
+        round(100 * ((split_highconf or 0) + (split_lowconf or 0)) / split_total, 2)
+        if split_total else None
+    )
 
-    l2_hc      = df_lima2.loc[(df_lima2["sample"] == s) & (df_lima2["confidence"] == "highconf")]
-    l2_lc      = df_lima2.loc[(df_lima2["sample"] == s) & (df_lima2["confidence"] == "lowconf")]
-    lima2_hc_in   = int(l2_hc["reads_in"].sum())     if len(l2_hc) else None
-    lima2_hc_pass = int(l2_hc["reads_passed"].sum()) if len(l2_hc) else None
-    lima2_lc_in   = int(l2_lc["reads_in"].sum())     if len(l2_lc) else None
-    lima2_lc_pass = int(l2_lc["reads_passed"].sum()) if len(l2_lc) else None
+    l2_hc        = df_lima2.loc[(df_lima2["sample"] == s) & (df_lima2["confidence"] == "highconf")] if len(df_lima2) else pd.DataFrame()
+    l2_lc        = df_lima2.loc[(df_lima2["sample"] == s) & (df_lima2["confidence"] == "lowconf")]  if len(df_lima2) else pd.DataFrame()
+    lima2_hc_in  = int(l2_hc["reads_in"].sum())      if len(l2_hc) else None
+    lima2_hc_pass = int(l2_hc["reads_passed"].sum())  if len(l2_hc) else None
+    lima2_lc_in  = int(l2_lc["reads_in"].sum())      if len(l2_lc) else None
+    lima2_lc_pass = int(l2_lc["reads_passed"].sum())  if len(l2_lc) else None
 
-    rf_hc      = df_refine.loc[(df_refine["sample"] == s) & (df_refine["confidence"] == "highconf")]
-    rf_lc      = df_refine.loc[(df_refine["sample"] == s) & (df_refine["confidence"] == "lowconf")]
-    flnc_hc    = int(rf_hc["total_flnc"].sum()) if len(rf_hc) else None
-    flnc_lc    = int(rf_lc["total_flnc"].sum()) if len(rf_lc) else None
+    rf_hc     = df_refine.loc[(df_refine["sample"] == s) & (df_refine["confidence"] == "highconf")] if len(df_refine) else pd.DataFrame()
+    rf_lc     = df_refine.loc[(df_refine["sample"] == s) & (df_refine["confidence"] == "lowconf")]  if len(df_refine) else pd.DataFrame()
+    flnc_hc   = int(rf_hc["total_flnc"].sum()) if len(rf_hc) else None
+    flnc_lc   = int(rf_lc["total_flnc"].sum()) if len(rf_lc) else None
     flnc_total = (flnc_hc or 0) + (flnc_lc or 0) or None
 
     summary_rows.append({
-        "sample":                    s,
-        "skera_input_reads":         sk_in,
-        "skera_segmented_reads":     sk_out,
-        "skera_pct_full_array":      sk["pct_full_array"]  if sk is not None else None,
-        "skera_mean_array_size":     sk["mean_array_size"] if sk is not None else None,
-        "lima1_reads_in":            l1["reads_in"]        if l1 is not None else None,
-        "lima1_reads_passed":        l1["reads_passed"]    if l1 is not None else None,
-        "lima1_pct_passed":          l1["pct_passed"]      if l1 is not None else None,
-        "assign_high_conf":          a["HIGH_CONF"]        if a is not None else None,
-        "assign_low_conf":           a["LOW_CONF"]         if a is not None else None,
-        "assign_unassigned":         a["UNASSIGNED"]       if a is not None else None,
-        "assign_pct_high_conf":      a["pct_high_conf"]    if a is not None else None,
-        "split_highconf_reads":      split_highconf,
-        "split_lowconf_reads":       split_lowconf,
-        "split_unassigned_reads":    split_unassigned,
-        "split_pct_assigned":        split_pct_assigned,
-        "lima2_hc_reads_in":         lima2_hc_in,
-        "lima2_hc_reads_passed":     lima2_hc_pass,
-        "lima2_hc_pct_passed":       round(100 * lima2_hc_pass / lima2_hc_in, 2) if lima2_hc_in else None,
-        "lima2_lc_reads_in":         lima2_lc_in,
-        "lima2_lc_reads_passed":     lima2_lc_pass,
-        "lima2_lc_pct_passed":       round(100 * lima2_lc_pass / lima2_lc_in, 2) if lima2_lc_in else None,
-        "flnc_highconf_reads":       flnc_hc,
-        "flnc_lowconf_reads":        flnc_lc,
-        "flnc_total_reads":          flnc_total,
-        "overall_yield_pct":         round(100 * flnc_total / sk_out, 2) if (sk_out and flnc_total) else None,
-        "highconf_yield_pct":        round(100 * flnc_hc / sk_out, 2)    if (sk_out and flnc_hc)    else None,
+        "sample":                s,
+        "processing_mode":       mode_label(s),
+        "skera_input_reads":     sk_in,
+        "skera_segmented_reads": sk_out,
+        "skera_pct_full_array":  sk["pct_full_array"]  if sk is not None else None,
+        "skera_mean_array_size": sk["mean_array_size"] if sk is not None else None,
+        # Lima pass 1: blank for single-library samples
+        "lima1_reads_in":        l1["reads_in"]     if l1 is not None else None,
+        "lima1_reads_passed":    l1["reads_passed"] if l1 is not None else None,
+        "lima1_pct_passed":      l1["pct_passed"]   if l1 is not None else None,
+        # Assignment: blank for single-library samples
+        "assign_high_conf":      a["HIGH_CONF"]     if a is not None else None,
+        "assign_low_conf":       a["LOW_CONF"]      if a is not None else None,
+        "assign_unassigned":     a["UNASSIGNED"]    if a is not None else None,
+        "assign_pct_high_conf":  a["pct_high_conf"] if a is not None else None,
+        # Split
+        "split_highconf_reads":    split_highconf,
+        "split_lowconf_reads":     split_lowconf,
+        "split_unassigned_reads":  split_unassigned,
+        "split_pct_assigned":      split_pct_assigned,
+        # Lima pass 2
+        "lima2_hc_reads_in":    lima2_hc_in,
+        "lima2_hc_reads_passed": lima2_hc_pass,
+        "lima2_hc_pct_passed":  round(100 * lima2_hc_pass / lima2_hc_in, 2) if lima2_hc_in else None,
+        "lima2_lc_reads_in":    lima2_lc_in,
+        "lima2_lc_reads_passed": lima2_lc_pass,
+        "lima2_lc_pct_passed":  round(100 * lima2_lc_pass / lima2_lc_in, 2) if lima2_lc_in else None,
+        # Refine
+        "flnc_highconf_reads":  flnc_hc,
+        "flnc_lowconf_reads":   flnc_lc,
+        "flnc_total_reads":     flnc_total,
+        "overall_yield_pct":    round(100 * flnc_total / sk_out, 2) if (sk_out and flnc_total) else None,
+        "highconf_yield_pct":   round(100 * flnc_hc / sk_out, 2)    if (sk_out and flnc_hc)    else None,
     })
 
 df_summary = pd.DataFrame(summary_rows)
 df_summary.to_csv(out_dir / "qc_summary.tsv", sep="\t", index=False)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Excel workbook
@@ -431,71 +483,91 @@ HEADER_FILL  = PatternFill("solid", start_color="366092", end_color="366092")
 HEADER_FONT  = Font(bold=True, color="FFFFFF", name="Arial", size=10)
 ALT_FILL     = PatternFill("solid", start_color="DCE6F1", end_color="DCE6F1")
 NORMAL_FONT  = Font(name="Arial", size=10)
-BOLD_FONT    = Font(name="Arial", size=10, bold=True)
 CENTER_ALIGN = Alignment(horizontal="center", vertical="center")
 LEFT_ALIGN   = Alignment(horizontal="left",   vertical="center")
 THIN_BORDER  = Border(
     bottom=Side(style="thin", color="B8CCE4"),
     right=Side(style="thin",  color="B8CCE4"),
 )
+# Mode column highlight colours
+SINGLE_FILL  = PatternFill("solid", start_color="E2EFDA", end_color="E2EFDA")  # light green
+MULTI_FILL   = PatternFill("solid", start_color="DDEBF7", end_color="DDEBF7")  # light blue
 
-def write_df_to_sheet(ws, df, title=None):
-    """Write a dataframe to a worksheet with formatting."""
+
+def write_df_to_sheet(ws, df, title=None, mode_col=None):
+    """
+    Write a DataFrame to a worksheet with standard formatting.
+
+    If mode_col names a column present in df, cells in that column are
+    highlighted: SINGLE-LIBRARY in green, MULTI-LIBRARY in blue. This makes
+    the processing mode immediately visible when scanning the sheet.
+    """
+    if df is None or len(df) == 0:
+        if title:
+            ws.cell(row=1, column=1, value=title).font = Font(
+                name="Arial", size=12, bold=True, color="17375E"
+            )
+        ws.cell(row=3, column=1, value="(no data for this stage in this run)")
+        return
+
     start_row = 1
     if title:
-        ws.cell(row=1, column=1, value=title).font = Font(name="Arial", size=12, bold=True, color="17375E")
+        ws.cell(row=1, column=1, value=title).font = Font(
+            name="Arial", size=12, bold=True, color="17375E"
+        )
         start_row = 3
 
-    # Header row
-    for col_idx, col_name in enumerate(df.columns, start=1):
-        cell = ws.cell(row=start_row, column=col_idx, value=col_name)
+    col_names = list(df.columns)
+
+    for col_idx, col_name in enumerate(col_names, start=1):
+        cell           = ws.cell(row=start_row, column=col_idx, value=col_name)
         cell.fill      = HEADER_FILL
         cell.font      = HEADER_FONT
         cell.alignment = CENTER_ALIGN
         cell.border    = THIN_BORDER
 
-    # Data rows
     for row_idx, (_, row) in enumerate(df.iterrows(), start=start_row + 1):
-        fill = ALT_FILL if row_idx % 2 == 0 else None
-        for col_idx, val in enumerate(row, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+        alt = ALT_FILL if row_idx % 2 == 0 else None
+        for col_idx, (col_name, val) in enumerate(zip(col_names, row), start=1):
+            cell           = ws.cell(row=row_idx, column=col_idx, value=val)
             cell.font      = NORMAL_FONT
             cell.alignment = LEFT_ALIGN
             cell.border    = THIN_BORDER
-            if fill:
-                cell.fill = fill
+            if mode_col and col_name == mode_col:
+                cell.fill = SINGLE_FILL if str(val) == "SINGLE-LIBRARY" else MULTI_FILL
+            elif alt:
+                cell.fill = alt
 
-    # Auto-size columns
-    for col_idx, col_name in enumerate(df.columns, start=1):
+    for col_idx, col_name in enumerate(col_names, start=1):
         max_len = max(
             len(str(col_name)),
-            df[col_name].astype(str).str.len().max() if len(df) else 0
+            df[col_name].astype(str).str.len().max() if len(df) else 0,
         )
         ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 40)
 
-    # Freeze header
     ws.freeze_panes = ws.cell(row=start_row + 1, column=1)
 
-wb = Workbook()
 
+# Sheet definitions: (tab_name, dataframe, title, mode_col_or_None)
 sheets = [
-    ("Summary",          df_summary,     "Pipeline QC — Master Read Tracking"),
-    ("Skera",            df_skera,       "Stage 1: Skera Segmentation"),
-    ("Lima_Pass1",       df_lima1,       "Stage 2: Lima Pass 1 (ZMW Assignment)"),
-    ("Lima1_Barcodes",   df_lima1_bc,    "Stage 2: Lima Pass 1 — Per Barcode Counts"),
-    ("Assign",           df_assign,      "Stage 3: Array Assignment — Per Sample"),
-    ("Assign_Library",   df_assign_lib,  "Stage 3: Array Assignment — Per Library"),
-    ("Split_Skera",      df_split,       "Stage 4: Split Skera by Library"),
-    ("Lima_Pass2",       df_lima2,       "Stage 5: Lima Pass 2 — Barcode Check"),
-    ("Lima2_Barcodes",   df_lima2_bc,    "Stage 5: Lima Pass 2 — Per Barcode Counts"),
-    ("Refine",           df_refine,      "Stage 6: IsoSeq Refine — FLNC PolyA Reads"),
+    ("Summary",        df_summary,     "Pipeline QC — Master Read Tracking",           "processing_mode"),
+    ("Skera",          df_skera,       "Stage 1: Skera Segmentation",                  "processing_mode"),
+    ("Lima_Pass1",     df_lima1,       "Stage 2: Lima Pass 1 — Multi-Library Only",    None),
+    ("Lima1_Barcodes", df_lima1_bc,    "Stage 2: Lima Pass 1 — Per Barcode Counts",    None),
+    ("Assign",         df_assign,      "Stage 3: Array Assignment — Per Sample",       None),
+    ("Assign_Library", df_assign_lib,  "Stage 3: Array Assignment — Per Library",      None),
+    ("Split_Skera",    df_split,       "Stage 4: Split Skera by Library",              "processing_mode"),
+    ("Lima_Pass2",     df_lima2,       "Stage 5: Lima Pass 2 — Barcode Check",         "processing_mode"),
+    ("Lima2_Barcodes", df_lima2_bc,    "Stage 5: Lima Pass 2 — Per Barcode Counts",    "processing_mode"),
+    ("Refine",         df_refine,      "Stage 6: IsoSeq Refine — FLNC PolyA Reads",   "processing_mode"),
 ]
 
-for i, (sheet_name, df, title) in enumerate(sheets):
+wb = Workbook()
+for i, (sheet_name, df, title, mode_col) in enumerate(sheets):
     ws = wb.active if i == 0 else wb.create_sheet(sheet_name)
     if i == 0:
         ws.title = sheet_name
-    write_df_to_sheet(ws, df, title=title)
+    write_df_to_sheet(ws, df, title=title, mode_col=mode_col)
 
 wb.save(out_dir / "pipeline_qc.xlsx")
 print(f"Done. Outputs written to {out_dir}")

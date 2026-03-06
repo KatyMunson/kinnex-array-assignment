@@ -1,46 +1,54 @@
-# Movies to process
+# =============================================================================
+# config.yaml — Kinnex Iso-seq Production Pipeline
+# =============================================================================
+
+# Path to the run manifest (tab-separated, see manifest.tab.example)
 manifest: manifest.tab
 
 # FASTA inputs
-primers_fasta: primers/primers.fasta
+primers_fasta:  primers/primers.fasta
 adapters_fasta: adapters/adapters.fasta
 
-assign_script: scripts/assign_kinnex.py
-split_skera_script: scripts/split_skera_by_library.py
-aggregate_script: scripts/aggregate_flnc_qc.py
-pipeline_qc_script: scripts/aggregate_pipeline_qc.py
-sankey_script: scripts/generate_sankey.py
+# Script paths (relative to this config file / Snakefile location)
+assign_script:       scripts/assign_kinnex.py
+split_skera_script:  scripts/split_skera_by_library.py
+aggregate_script:    scripts/aggregate_flnc_qc.py
+pipeline_qc_script:  scripts/aggregate_pipeline_qc.py
+sankey_script:       scripts/generate_sankey.py
 
-# IsoSeq lima options
+# IsoSeq Lima options (Lima pass 2)
 lima:
-  peek_guess: false   # set to false to disable --peek-guess
+  peek_guess: true   # --peek-guess is always used for Lima pass 2
 
 # IsoSeq refine options
 refine:
-  require_polya: true
+  require_polya:    true
   min_polya_length: 20
 
 # Per-rule SGE resources
+# mem is GB per slot (per thread). SGE multiplies mem × threads for total.
+# The attempt multiplier provides automatic memory escalation on retries.
+# Recommended submission flag: --retries 3
 resources:
   skera:
     threads: 8
-    mem: 6   # GB
+    mem: 1      # 1 GB/slot × 8 threads = 8 GB total
     hrs: 6
   lima:
     threads: 8
-    mem: 8
+    mem: 1      # 1 GB/slot × 8 threads = 8 GB total
     hrs: 12
   refine:
     threads: 8
-    mem: 6
+    mem: 1      # 1 GB/slot × 8 threads = 8 GB total
     hrs: 8
   assign:
     threads: 2
-    mem: 12
+    mem: 6      # 6 GB/slot × 2 threads = 12 GB total
     hrs: 8
   split:
     threads: 2
-    mem: 12
+    mem: 6      # 6 GB/slot × 2 threads = 12 GB total
     hrs: 8
   aggregate:
     threads: 1

@@ -1,64 +1,124 @@
 # =============================================================================
-# Snakefile — Kinnex Array Assignment Production Pipeline
+# Snakefile — Kinnex Iso-seq Production Pipeline
 #
-# Full processing pipeline: Skera segmentation → Lima barcode detection →
-# Bayesian array assignment → split by library → Lima demultiplexing →
-# IsoSeq refine → QC aggregation.
+# Unified pipeline supporting single-library and multi-library samples in
+# the same run, determined per-sample from the arrays file.
 #
-# Usage: snakemake -s Snakefile --configfile config.yaml --cores <N>
-# See README.md for full documentation and cluster submission instructions.
+# DAG overview
+# ------------
+#   Skera split  (all samples)
+#       │
+#       ├─ [multi-library]  Lima pass 1 (--no-output, report only)
+#       │                       → assign_arrays (Bayesian ZMW classifier)
+#       │                       → split_skera_by_library
+#       │                           writes: {lib}.highconf.bam / {lib}.lowconf.bam
+#       │
+#       └─ [single-library] passthrough_single_library
+#                               writes: {lib}.highconf.bam  (Skera BAM directly)
+#
+#       checkpoint: split_skera_collect  (gates Lima pass 2 for ALL samples)
+#           │
+#           Lima pass 2  (all samples, --isoseq --peek-guess)
+#           checkpoint: dynamic outputs per library / confidence tier
+#           │
+#           IsoSeq refine  (FLNC + polyA filtering)
+#           │
+#           Aggregate FLNC QC + Pipeline QC report + Sankey diagram
+#
+# Processing modes
+# ----------------
+#   single-library : 1 library per KN_BC. No Lima pass 1, no assignment, no
+#                    split. The Skera BAM is written directly as HIGH_CONF.
+#                    HIGH_CONF is definitionally correct — there is nothing
+#                    to disambiguate.
+#
+#   multi-library  : 2+ libraries share a KN_BC. Full Bayesian assignment
+#                    pipeline; reads are split into HIGH_CONF / LOW_CONF /
+#                    UNASSIGNED before Lima pass 2.
+#
+# Mode detection
+# --------------
+#   1. Auto-detected from the arrays file at startup (see utils.py).
+#   2. Optional 5th manifest column ("single" or "multi") overrides
+#      auto-detection with cross-validation (see utils.py: resolve_mode).
+#
+# Usage
+# -----
+#   # Dry run
+#   snakemake -s Snakefile --configfile config.yaml -n
+#
+#   # Local
+#   snakemake -s Snakefile --configfile config.yaml --cores 8 --use-conda
+#
+#   # SGE cluster (recommend --retries 3 for memory scaling)
+#   snakemake -s Snakefile --configfile config.yaml \
+#       --cluster "qsub -pe smp {threads} -l h_vmem={resources.mem}G \
+#                       -l h_rt={resources.hrs}:00:00 -j y -cwd" \
+#       --jobs 50 --retries 3 --use-envmodules
+#
+# See README.md for full documentation.
 #
 # Author:  KM
 # Created: 2026-02
 # =============================================================================
 
 import os
+import sys
 import glob
 from pathlib import Path
 
+# Make scripts/ importable so utils can be imported at parse time
+sys.path.insert(0, os.path.join(os.path.dirname(workflow.snakefile), "scripts"))
+import utils
+
 ############################################
-# Load config and manifest
+# Config
 ############################################
 
 configfile: "config.yaml"
 
-MANIFEST = config["manifest"]  # tab-delimited: sample\tKN_BC\tbam\tarrays
-SAMPLES = []
-BAMS = {}
-ARRAYMAP = {}
-KNBC = {}
-
-if not os.path.exists(MANIFEST):
-    raise FileNotFoundError(f"Manifest file not found: {MANIFEST}")
-
-with open(MANIFEST) as f:
-    for lineno, line in enumerate(f, 1):
-        if line.strip() and not line.startswith("#"):
-            fields = line.strip().split("\t")
-            if len(fields) < 4:
-                raise ValueError(
-                    f"Manifest line {lineno} has {len(fields)} field(s), expected 4 "
-                    f"(sample, KN_BC, bam, arrays). "
-                    f"Check for missing tabs or wrong delimiter.\n"
-                    f"  Line content: {line.rstrip()!r}"
-                )
-            sample, knbc, bam, arrays = fields[0], fields[1], fields[2], fields[3]
-            SAMPLES.append(sample)
-            BAMS[sample] = bam
-            ARRAYMAP[sample] = arrays
-            KNBC[sample] = knbc
-
-if not SAMPLES:
-    raise ValueError("No samples found in manifest!")
-
-ASSIGN_SCRIPT      = config["assign_script"]
 PRIMERS_FASTA      = config["primers_fasta"]
+ADAPTERS_FASTA     = config["adapters_fasta"]
+ASSIGN_SCRIPT      = config["assign_script"]
 SPLIT_SKERA_SCRIPT = config["split_skera_script"]
 AGGREGATE_SCRIPT   = config["aggregate_script"]
 PIPELINE_QC_SCRIPT = config["pipeline_qc_script"]
 SANKEY_SCRIPT      = config["sankey_script"]
 
+############################################
+# Manifest parsing and mode resolution
+############################################
+# parse_manifest() reads the 4- or 5-column manifest, calls resolve_mode()
+# for every sample (logging mode decisions to stdout), and returns dicts
+# for all per-sample metadata. Any cross-validation errors abort here, before
+# any cluster jobs are submitted.
+
+_manifest = utils.parse_manifest(config["manifest"])
+
+SAMPLES     = _manifest["samples"]
+BAMS        = _manifest["bams"]
+ARRAYMAP    = _manifest["array_files"]
+KNBC        = _manifest["knbcs"]
+MODES       = _manifest["modes"]    # { sample: "single" | "multi" }
+LIBRARIES   = _manifest["libraries"] # { sample: [lib_name, ...] }
+
+# Derived sets for rule targeting
+MULTI_SAMPLES  = [s for s in SAMPLES if MODES[s] == utils.MULTI]
+SINGLE_SAMPLES = [s for s in SAMPLES if MODES[s] == utils.SINGLE]
+
+if MULTI_SAMPLES:
+    print(f"[manifest] Multi-library samples  ({len(MULTI_SAMPLES)}): "
+          f"{', '.join(MULTI_SAMPLES)}", flush=True)
+if SINGLE_SAMPLES:
+    print(f"[manifest] Single-library samples ({len(SINGLE_SAMPLES)}): "
+          f"{', '.join(SINGLE_SAMPLES)}", flush=True)
+
+############################################
+# Constants
+############################################
+
 CONF_LEVELS = ["highconf", "lowconf"]
+VALID_CONF  = {"highconf", "lowconf"}
 
 wildcard_constraints:
     sample="[^/]+",
@@ -69,9 +129,14 @@ wildcard_constraints:
 # Helper functions
 ############################################
 
-VALID_CONF = {"highconf", "lowconf"}
-
 def get_library_conf_pairs(wc):
+    """
+    Return all (library, confidence) pairs for a sample after split_skera
+    has run. Used to enumerate Lima pass 2 targets dynamically.
+
+    Depends on the split_skera_collect checkpoint having fired, which
+    guarantees all .bam files under results/split_skera/{sample}/ exist.
+    """
     checkpoints.split_skera_collect.get()
 
     pairs = []
@@ -88,8 +153,8 @@ def get_library_conf_pairs(wc):
 
 
 def get_lima2_dirs_for_sample(wc):
+    """Return expected Lima pass 2 output directories for one sample."""
     pairs = get_library_conf_pairs(wc)
-
     return expand(
         "results/lima2/{sample}/{library}/{confidence}",
         sample=wc.sample,
@@ -97,78 +162,131 @@ def get_lima2_dirs_for_sample(wc):
         confidence=[p[1] for p in pairs],
     )
 
+
 def get_all_lima2_dirs(wc):
-    """Return all lima2 directory outputs across all samples."""
+    """Return all Lima pass 2 directories across all samples."""
     return [
         f for s in SAMPLES
-        for f in get_lima2_dirs_for_sample(type('W', (), {'sample': s})())
+        for f in get_lima2_dirs_for_sample(type("W", (), {"sample": s})())
     ]
 
+
 def get_flnc_bams_for_sample(wc):
-    """Return expected refine outputs after lima2 completes for a sample."""
+    """
+    Return expected refine output paths for one sample, derived from
+    the Lima pass 2 FL BAMs that exist after the split_done checkpoint.
+
+    Lima pass 2 emits one .fl.*.bam per barcode detected via --peek-guess;
+    the number and names of these files cannot be known at DAG construction
+    time, which is why split_done is a checkpoint.
+    """
     checkpoints.split_done.get()
     fl_bams = glob.glob(f"results/lima2/{wc.sample}/*/*/*.fl.*.bam")
     results = []
     for b in fl_bams:
-        b = Path(b)
-        confidence = b.parent.name        # highconf or lowconf
-        library    = b.parent.parent.name # library name
+        b          = Path(b)
+        confidence = b.parent.name
+        library    = b.parent.parent.name
         results.append(
             f"results/refine/{wc.sample}/{library}/{confidence}/{b.stem}.flnc.bam"
         )
     return results
 
+
 def get_all_flnc_bams(wc):
     """Return all refine outputs across all samples."""
     return [
         f for s in SAMPLES
-        for f in get_flnc_bams_for_sample(type('W', (), {'sample': s})())
+        for f in get_flnc_bams_for_sample(type("W", (), {"sample": s})())
     ]
 
+
+def first_lima_report(wc):
+    """
+    Return the path to the Lima pass 1 report for a multi-library sample.
+    Uses the lima_isoseq checkpoint output to locate the .lima.report file
+    once Lima has finished (so the filename, which includes the sample stem,
+    is known).
+    """
+    ckpt      = checkpoints.lima_isoseq.get(sample=wc.sample)
+    lima_dir  = ckpt.output[0]
+    reports   = glob.glob(os.path.join(lima_dir, "*.lima.report"))
+    if not reports:
+        raise FileNotFoundError(
+            f"No Lima report found for sample {wc.sample} in {lima_dir}"
+        )
+    return reports[0]
+
+
 ############################################
-# Final target — must be first
+# Final target — must be first rule
 ############################################
 
 rule all:
     input:
-        expand("results/assigned/{sample}.txt", sample=SAMPLES),
+        # Assignment outputs (multi-library samples only)
+        expand("results/assigned/{sample}.txt", sample=MULTI_SAMPLES),
+        # QC reports (all samples)
         "results/qc/flnc_qc_summary.tsv",
         "results/qc/pipeline_qc.xlsx",
         "results/qc/pipeline_read_flow.html"
 
+
 ############################################
-# Step 1 — Skera split
+# Step 1 — Skera split (all samples)
 ############################################
 
 rule skera_split:
+    """
+    Segment concatenated Kinnex arrays into individual S-reads.
+    Runs for every sample regardless of processing mode.
+    """
     input:
-        bam=lambda wc: BAMS[wc.sample],
-        adapters=config["adapters_fasta"]
+        bam      = lambda wc: BAMS[wc.sample],
+        adapters = ADAPTERS_FASTA
     output:
         "results/skera/{sample}.skera.bam"
     threads: config["resources"]["skera"]["threads"]
     resources:
-        mem=lambda wildcards, attempt: config["resources"]["skera"]["mem"] * attempt,
-        hrs=config["resources"]["skera"]["hrs"]
+        mem = lambda wildcards, attempt: config["resources"]["skera"]["mem"] * attempt,
+        hrs = config["resources"]["skera"]["hrs"]
+    conda:   "envs/skera.yaml"
+    envmodules: "skera"
+    log:
+        "results/logs/{sample}/skera_split.log"
     shell:
         """
-        skera split {input.bam} {input.adapters} {output}
+        skera split {input.bam} {input.adapters} {output} > {log} 2>&1
         """
 
+
 ############################################
-# Step 2 — Lima pass 1 (report only, no BAMs)
+# Step 2 — Lima pass 1 (multi-library only)
+# Report only (--no-output); output BAMs not needed, only the .lima.report
+# which feeds the Bayesian classifier.
 ############################################
 
 checkpoint lima_isoseq:
+    """
+    Run Lima barcode detection on the Skera BAM to generate a .lima.report
+    for the Bayesian array assignment classifier.
+
+    --no-output suppresses BAM writing; only the report and summary files
+    are needed. Runs only for multi-library samples.
+    """
     input:
-        bam="results/skera/{sample}.skera.bam",
-        primers=PRIMERS_FASTA
+        bam    = "results/skera/{sample}.skera.bam",
+        primers = PRIMERS_FASTA
     output:
         directory("results/lima/{sample}")
     threads: config["resources"]["lima"]["threads"]
     resources:
-        mem=lambda wildcards, attempt: config["resources"]["lima"]["mem"] * attempt,
-        hrs=config["resources"]["lima"]["hrs"]
+        mem = lambda wildcards, attempt: config["resources"]["lima"]["mem"] * attempt,
+        hrs = config["resources"]["lima"]["hrs"]
+    conda:   "envs/lima.yaml"
+    envmodules: "lima"
+    log:
+        "results/logs/{sample}/lima_pass1.log"
     shell:
         """
         mkdir -p {output}
@@ -177,199 +295,375 @@ checkpoint lima_isoseq:
             --min-score 80 \
             --min-score-lead 10 \
             --min-ref-span 0.75 \
-            --no-output
+            --no-output > {log} 2>&1
         """
 
-############################################
-# Step 3 — Assign Kinnex arrays per sample
-############################################
 
-def first_lima_report(wc):
-    ckpt = checkpoints.lima_isoseq.get(sample=wc.sample)
-    lima_dir = ckpt.output[0]
-    report_files = glob.glob(os.path.join(lima_dir, "*.lima.report"))
-    if not report_files:
-        raise FileNotFoundError(f"No Lima report found for sample {wc.sample}")
-    return report_files[0]
+############################################
+# Step 3 — Bayesian array assignment (multi-library only)
+############################################
 
 rule assign_arrays:
+    """
+    Classify each ZMW to its library of origin using a Bayesian scorer
+    (assign_kinnex.py). Reads the Lima pass 1 .lima.report for barcode
+    observations and scores each ZMW against all libraries sharing the
+    same KN_BC. Outputs HIGH_CONF, LOW_CONF, or UNASSIGNED per ZMW.
+
+    Runs only for multi-library samples.
+    """
     input:
-        hybrid=first_lima_report,
-        script=ASSIGN_SCRIPT
+        hybrid = first_lima_report,
+        script = ASSIGN_SCRIPT
     params:
-        arrays=lambda wc: ARRAYMAP[wc.sample],
-        knbc=lambda wc: KNBC[wc.sample]
+        arrays = lambda wc: ARRAYMAP[wc.sample],
+        knbc   = lambda wc: KNBC[wc.sample]
     output:
         "results/assigned/{sample}.txt"
     threads: config["resources"]["assign"]["threads"]
     resources:
-        mem=lambda wildcards, attempt: config["resources"]["assign"]["mem"] * attempt,
-        hrs=config["resources"]["assign"]["hrs"]
+        mem = lambda wildcards, attempt: config["resources"]["assign"]["mem"] * attempt,
+        hrs = config["resources"]["assign"]["hrs"]
+    conda:   "envs/python.yaml"
+    log:
+        "results/logs/{sample}/assign_arrays.log"
     shell:
         """
-        python {input.script} {params.arrays} {input.hybrid} {params.knbc} {output} --threads {threads}
+        python {input.script} \
+            {params.arrays} \
+            {input.hybrid} \
+            {params.knbc} \
+            {output} \
+            --threads {threads} > {log} 2>&1
         """
 
+
 ############################################
-# Step 4a — Split skera BAM by library (parallel per sample)
+# Step 4a — Split Skera BAM by library (multi-library)
 ############################################
 
 rule split_skera_by_library:
+    """
+    Split the Skera BAM into per-library, per-confidence-tier BAMs using
+    the ZMW assignments from assign_arrays.
+
+    Writes:
+      results/split_skera/{sample}/{library}.highconf.bam
+      results/split_skera/{sample}/{library}.lowconf.bam
+      results/split_skera/{sample}/unassigned.bam
+      results/split_skera/{sample}/split_skera_qc.tsv
+
+    Sentinel BAMs (header-only, zero reads) are written for any library /
+    confidence combination that received no assignments, so that Lima pass 2
+    does not raise MissingInputException.
+
+    Runs only for multi-library samples. The mode-specific sentinel filename
+    (.done_multi_{sample}) prevents ambiguity with passthrough_single_library,
+    which writes .done_single_{sample}. split_skera_collect accepts both.
+    """
     input:
-        bam="results/skera/{sample}.skera.bam",
-        assign="results/assigned/{sample}.txt",
-        script=SPLIT_SKERA_SCRIPT
+        bam    = "results/skera/{sample}.skera.bam",
+        assign = "results/assigned/{sample}.txt",
+        script = SPLIT_SKERA_SCRIPT
     output:
-        touch("results/split_skera/.done_{sample}")
+        touch("results/split_skera/.done_multi_{sample}")
     params:
-        outdir="results/split_skera/{sample}"
+        outdir = "results/split_skera/{sample}"
     threads: config["resources"]["split"]["threads"]
     resources:
-        mem=lambda wildcards, attempt: config["resources"]["split"]["mem"] * attempt,
-        hrs=config["resources"]["split"]["hrs"]
+        mem = lambda wildcards, attempt: config["resources"]["split"]["mem"] * attempt,
+        hrs = config["resources"]["split"]["hrs"]
+    conda:   "envs/python.yaml"
+    log:
+        "results/logs/{sample}/split_skera.log"
     shell:
         """
         mkdir -p {params.outdir}
-        python {input.script} {input.bam} {input.assign} {params.outdir}
+        python {input.script} \
+            {input.bam} \
+            {input.assign} \
+            {params.outdir} > {log} 2>&1
         """
 
+
 ############################################
-# Step 4b — Collect all split_skera jobs (checkpoint)
+# Step 4b — Single-library passthrough
+############################################
+
+rule passthrough_single_library:
+    """
+    For single-library samples, write the Skera BAM directly to the
+    split_skera output directory as {library}.highconf.bam.
+
+    There is nothing to disambiguate — every read belongs to the one
+    library, so HIGH_CONF is the correct and only tier. No assignment
+    step is run.
+
+    Also writes a minimal split_skera_qc.tsv so that aggregate_pipeline_qc
+    has a consistent record regardless of processing mode.
+
+    The mode-specific sentinel (.done_single_{sample}) prevents ambiguity
+    with split_skera_by_library. split_skera_collect accepts both sentinel
+    patterns.
+    """
+    input:
+        bam = "results/skera/{sample}.skera.bam"
+    output:
+        touch("results/split_skera/.done_single_{sample}")
+    params:
+        outdir  = "results/split_skera/{sample}",
+        library = lambda wc: LIBRARIES[wc.sample][0],  # exactly one library
+        sample  = lambda wc: wc.sample
+    threads: 1
+    resources:
+        mem = lambda wildcards, attempt: config["resources"]["split"]["mem"] * attempt,
+        hrs = config["resources"]["split"]["hrs"]
+    conda:   "envs/python.yaml"
+    log:
+        "results/logs/{sample}/passthrough_single.log"
+    shell:
+        """
+        mkdir -p {params.outdir}
+
+        # Hard-link the Skera BAM as the highconf BAM for this library.
+        # Hard-linking avoids doubling disk usage; falls back to copy if
+        # cross-device linking fails (e.g. across mount points).
+        dest={params.outdir}/{params.library}.highconf.bam
+        ln {input.bam} "$dest" 2>/dev/null || cp {input.bam} "$dest"
+
+        # Index the output BAM
+        samtools index "$dest"
+
+        # Write a minimal QC TSV so aggregate_pipeline_qc has a record.
+        qc={params.outdir}/split_skera_qc.tsv
+        printf 'library\tread_count\n' > "$qc"
+        n=$(samtools view -c "$dest")
+        printf '%s.HIGH_CONF\t%s\n' "{params.library}" "$n" >> "$qc"
+
+        echo "[passthrough] {params.sample}: wrote $dest ($n reads)" >> {log} 2>&1
+        """
+
+
+############################################
+# Step 4c — Collect all split_skera jobs (checkpoint)
 ############################################
 
 checkpoint split_skera_collect:
+    """
+    Barrier checkpoint: all split_skera outputs must be complete before
+    Lima pass 2 can begin.
+
+    Multi-library samples produce .done_multi_{sample} (from
+    split_skera_by_library); single-library samples produce
+    .done_single_{sample} (from passthrough_single_library). The two
+    distinct filenames are what prevent Snakemake from treating the rules
+    as ambiguous. Both patterns are listed here so all samples are gated
+    correctly regardless of mode.
+    """
     input:
-        expand("results/split_skera/.done_{sample}", sample=SAMPLES)
+        expand("results/split_skera/.done_multi_{sample}",  sample=MULTI_SAMPLES),
+        expand("results/split_skera/.done_single_{sample}", sample=SINGLE_SAMPLES),
     output:
         touch("results/split_skera/.all_done")
     threads: 1
     resources:
-        mem=1,
-        hrs=1
+        mem = 1,
+        hrs = 1
 
 
 ############################################
-# Step 5 — Lima pass 2 per library (checkpoint, --peek-guess)
+# Step 5 — Lima pass 2, per library / confidence (all samples)
 ############################################
 
 checkpoint lima_pass2:
+    """
+    Full Lima demultiplexing per library and confidence tier.
+
+    --peek-guess allows Lima to auto-detect the barcode orientation from a
+    read peek; it produces a variable number of output BAMs (one per barcode
+    detected), which is why this is a checkpoint rather than a plain rule —
+    the downstream refine inputs cannot be enumerated until Lima has run.
+
+    Skips gracefully if the input BAM has zero reads (sentinel BAM from
+    split_skera_by_library). This handles the case where a confidence tier
+    received no assignments without raising MissingInputException.
+    """
     input:
-        bam="results/split_skera/{sample}/{library}.{confidence}.bam",
-        primers=PRIMERS_FASTA
+        bam    = "results/split_skera/{sample}/{library}.{confidence}.bam",
+        primers = PRIMERS_FASTA
     output:
         directory("results/lima2/{sample}/{library}/{confidence}")
     threads: config["resources"]["lima"]["threads"]
     resources:
-        mem=lambda wildcards, attempt: config["resources"]["lima"]["mem"] * attempt,
-        hrs=config["resources"]["lima"]["hrs"]
+        mem = lambda wildcards, attempt: config["resources"]["lima"]["mem"] * attempt,
+        hrs = config["resources"]["lima"]["hrs"]
+    conda:   "envs/lima.yaml"
+    envmodules: "lima"
+    log:
+        "results/logs/{sample}/lima2_{library}_{confidence}.log"
     shell:
         """
         mkdir -p {output}
-        # Skip lima if the input BAM is a zero-read sentinel (no reads for this
-        # confidence tier). samtools view -c counts records; header-only = 0.
         n_reads=$(samtools view -c {input.bam})
         if [ "$n_reads" -eq 0 ]; then
-            echo "[lima_pass2] Skipping {wildcards.library}/{wildcards.confidence}: 0 reads in input BAM"
+            echo "[lima_pass2] Skipping {wildcards.library}/{wildcards.confidence}: \
+0 reads in input BAM" | tee -a {log}
         else
-            lima {input.bam} {input.primers} {output}/{wildcards.library}.fl.bam \
+            lima {input.bam} {input.primers} \
+                {output}/{wildcards.library}.fl.bam \
                 --isoseq \
-                --peek-guess
+                --peek-guess >> {log} 2>&1
         fi
         """
 
+
 ############################################
-# Step 5b — Global lima2 completion checkpoint
+# Step 5b — Global Lima pass 2 completion checkpoint
 ############################################
 
 checkpoint split_done:
+    """
+    Barrier checkpoint: all Lima pass 2 directories must exist before refine
+    inputs can be enumerated. The FL BAM filenames produced by --peek-guess
+    are not known until Lima runs, so get_flnc_bams_for_sample() depends on
+    this checkpoint having fired.
+    """
     input:
         get_all_lima2_dirs
     output:
         touch("results/lima2/.all_lima2_done")
     threads: 1
     resources:
-        mem=1,
-        hrs=1
+        mem = 1,
+        hrs = 1
+
 
 ############################################
-# Step 6 — IsoSeq refine on lima2 outputs
+# Step 6 — IsoSeq refine (all samples)
 ############################################
 
 rule isoseq_refine:
+    """
+    Generate FLNC (full-length non-chimeric) reads with polyA tail filtering.
+
+    Input BAMs come from Lima pass 2 and are already per-library and
+    per-confidence tier. The output path preserves this structure so that
+    aggregate_flnc_qc.py and aggregate_pipeline_qc.py can locate reads
+    unambiguously.
+
+    Single-library samples arrive here via the highconf tier only;
+    multi-library samples may have both highconf and lowconf inputs.
+    The rule itself is mode-agnostic — it processes whatever Lima pass 2
+    produced.
+    """
     input:
-        bam="results/lima2/{sample}/{library}/{confidence}/{bam_stem}.bam",
-        primers=PRIMERS_FASTA
+        bam    = "results/lima2/{sample}/{library}/{confidence}/{bam_stem}.bam",
+        primers = PRIMERS_FASTA
     output:
-        bam="results/refine/{sample}/{library}/{confidence}/{bam_stem}.flnc.bam"
+        bam = "results/refine/{sample}/{library}/{confidence}/{bam_stem}.flnc.bam"
     threads: config["resources"]["refine"]["threads"]
     resources:
-        mem=lambda wildcards, attempt: config["resources"]["refine"]["mem"] * attempt,
-        hrs=config["resources"]["refine"]["hrs"]
+        mem = lambda wildcards, attempt: config["resources"]["refine"]["mem"] * attempt,
+        hrs = config["resources"]["refine"]["hrs"]
     params:
-        require_polya=lambda wc: "--require-polya" if config["refine"].get("require_polya", False) else "",
-        min_polya=config["refine"].get("min_polya_length", 20)
+        require_polya = lambda wc: "--require-polya" if config["refine"].get("require_polya", False) else "",
+        min_polya     = config["refine"].get("min_polya_length", 20)
+    conda:   "envs/isoseq.yaml"
+    envmodules: "isoseq"
+    log:
+        "results/logs/{sample}/refine_{library}_{confidence}_{bam_stem}.log"
     shell:
         """
         isoseq refine {input.bam} {input.primers} {output.bam} \
-            {params.require_polya} --min-polya-length {params.min_polya}
+            {params.require_polya} \
+            --min-polya-length {params.min_polya} > {log} 2>&1
         """
+
 
 ############################################
 # Step 7 — Aggregate FLNC QC summary
 ############################################
 
 rule aggregate_flnc_qc:
+    """
+    Summarise FLNC polyA read counts per sample / library / confidence tier
+    by parsing isoseq refine filter_summary JSON files. Output is a TSV
+    with one row per sample / library / confidence combination.
+    """
     input:
-        flnc_bams=get_all_flnc_bams,
-        script=AGGREGATE_SCRIPT
+        flnc_bams = get_all_flnc_bams,
+        script    = AGGREGATE_SCRIPT
     output:
         "results/qc/flnc_qc_summary.tsv"
     threads: 1
     resources:
-        mem=lambda wildcards, attempt: config["resources"]["aggregate"]["mem"] * attempt,
-        hrs=config["resources"]["aggregate"]["hrs"]
+        mem = lambda wildcards, attempt: config["resources"]["aggregate"]["mem"] * attempt,
+        hrs = config["resources"]["aggregate"]["hrs"]
+    conda:   "envs/python.yaml"
+    log:
+        "results/logs/aggregate_flnc_qc.log"
     shell:
         """
-        python {input.script} results/refine {output}
+        python {input.script} results/refine {output} > {log} 2>&1
         """
+
 
 ############################################
 # Step 8 — Pipeline QC report
 ############################################
 
 rule pipeline_qc:
+    """
+    Aggregate QC metrics across all pipeline stages (Skera, Lima, assignment,
+    split, refine) into TSV files and a formatted Excel workbook.
+
+    The manifest is passed so that aggregate_pipeline_qc.py can look up
+    processing mode per sample and annotate the Refine tab accordingly
+    (SINGLE-LIBRARY / MULTI-LIBRARY column).
+    """
     input:
-        flnc_summary="results/qc/flnc_qc_summary.tsv",
-        script=PIPELINE_QC_SCRIPT
+        flnc_summary = "results/qc/flnc_qc_summary.tsv",
+        script       = PIPELINE_QC_SCRIPT
     output:
-        xlsx="results/qc/pipeline_qc.xlsx",
-        summary="results/qc/qc_summary.tsv"
+        xlsx    = "results/qc/pipeline_qc.xlsx",
+        summary = "results/qc/qc_summary.tsv"
     threads: 1
     resources:
-        mem=lambda wildcards, attempt: config["resources"]["qc"]["mem"] * attempt,
-        hrs=config["resources"]["qc"]["hrs"]
+        mem = lambda wildcards, attempt: config["resources"]["qc"]["mem"] * attempt,
+        hrs = config["resources"]["qc"]["hrs"]
     params:
-        manifest=config["manifest"]
+        manifest = config["manifest"]
+    conda:   "envs/python.yaml"
+    log:
+        "results/logs/pipeline_qc.log"
     shell:
         """
-        python {input.script} results {params.manifest} results/qc
+        python {input.script} results {params.manifest} results/qc > {log} 2>&1
         """
 
+
 ############################################
-# Step 9 — Sankey read flow plot
+# Step 9 — Sankey read flow diagram
 ############################################
 
 rule sankey_plot:
+    """
+    Generate an interactive HTML Sankey diagram of read flow through the
+    pipeline: S-reads → assignment → libraries → FLNC.
+    """
     input:
-        qc_dir="results/qc/qc_summary.tsv",
-        script=SANKEY_SCRIPT
+        qc_dir = "results/qc/qc_summary.tsv",
+        script = SANKEY_SCRIPT
     output:
         "results/qc/pipeline_read_flow.html"
     threads: 1
     resources:
-        mem=4,
-        hrs=1
+        mem = 4,
+        hrs = 1
+    conda:   "envs/python.yaml"
+    log:
+        "results/logs/sankey_plot.log"
     shell:
         """
-        python {input.script} results/qc {output}
+        python {input.script} results/qc {output} > {log} 2>&1
         """
