@@ -4,6 +4,18 @@ Collected during development and testing of the pipeline.
 Items to address before or during the next major revision.
 
 ---
+##Sankey plot broken
+
+**Issue:** `generate_sankey.py` / rule sankey_plot is not producing a
+correct output. Needs investigation.
+**To do:** Run generate_sankey.py manually against a completed results
+directory and check stderr for errors. Likely a data format mismatch between
+`qc_summary.tsv` (which feeds it) and what the script expects — possibly
+predates the single/multi-library unification and assumes all samples are
+multi-library.
+
+
+---
 
 ## Rule granularity — Snakefile_subsample
 

@@ -26,20 +26,33 @@ import os
 import re
 import json
 import glob
+import argparse
 import pandas as pd
 from pathlib import Path
 from collections import defaultdict
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.drawing.image import Image as XLImage
 
 # utils.py lives in the same scripts/ directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import utils
 
-results_dir = Path(sys.argv[1])
-manifest    = Path(sys.argv[2])
-out_dir     = Path(sys.argv[3])
+parser = argparse.ArgumentParser()
+parser.add_argument("results_dir")
+parser.add_argument("manifest")
+parser.add_argument("out_dir")
+parser.add_argument("--posteriors-dir", default=None,
+                    help="Directory containing per-sample posterior PNG files "
+                         "(results/qc/posteriors/). If provided, PNGs are "
+                         "embedded in the Posteriors sheet of the Excel workbook.")
+args = parser.parse_args()
+
+results_dir    = Path(args.results_dir)
+manifest       = Path(args.manifest)
+out_dir        = Path(args.out_dir)
+posteriors_dir = Path(args.posteriors_dir) if args.posteriors_dir else None
 out_dir.mkdir(parents=True, exist_ok=True)
 
 # ── Load manifest and resolve modes ───────────────────────────────────────────
@@ -568,6 +581,42 @@ for i, (sheet_name, df, title, mode_col) in enumerate(sheets):
     if i == 0:
         ws.title = sheet_name
     write_df_to_sheet(ws, df, title=title, mode_col=mode_col)
+
+# ── Posteriors sheet ───────────────────────────────────────────────────────────
+# Embed one PNG per multi-library sample, stacked vertically.
+# Each image is preceded by the sample name as a label.
+# Skipped gracefully if no posteriors directory was provided or no PNGs exist.
+if posteriors_dir and posteriors_dir.exists():
+    png_files = sorted(posteriors_dir.glob("*_posteriors.png"))
+    if png_files:
+        ws_post = wb.create_sheet("Posteriors")
+        ws_post.cell(row=1, column=1, value="Posterior Distributions — Multi-Library Samples").font = Font(
+            name="Arial", size=12, bold=True, color="17375E"
+        )
+        # Each PNG is placed at a fixed height of ~300px = ~225pt = ~30 rows.
+        # Images are anchored by cell reference; row spacing keeps them from
+        # overlapping. Adjust IMG_ROW_HEIGHT if your PNGs are a different size.
+        IMG_ROW_HEIGHT = 32   # rows to advance between images
+        current_row    = 3
+        for png_path in png_files:
+            sample_name = png_path.stem.replace("_posteriors", "")
+            ws_post.cell(row=current_row, column=1, value=sample_name).font = Font(
+                name="Arial", size=10, bold=True, color="366092"
+            )
+            img = XLImage(str(png_path))
+            # Scale to a consistent display width of ~900px while preserving
+            # aspect ratio. The PNG is 150dpi at 10in wide = 1500px; scale to
+            # roughly half for comfortable workbook display.
+            img.width  = 750
+            img.height = int(img.width * 5 / 10)  # 10x5in original aspect ratio
+            ws_post.add_image(img, f"A{current_row + 1}")
+            current_row += IMG_ROW_HEIGHT
+        print(f"[pipeline_qc] Embedded {len(png_files)} posterior plot(s) in Posteriors sheet.")
+    else:
+        print(f"[pipeline_qc] WARNING: posteriors dir {posteriors_dir} exists but contains no PNGs.")
+else:
+    if posteriors_dir:
+        print(f"[pipeline_qc] WARNING: posteriors dir {posteriors_dir} not found — skipping Posteriors sheet.")
 
 wb.save(out_dir / "pipeline_qc.xlsx")
 print(f"Done. Outputs written to {out_dir}")

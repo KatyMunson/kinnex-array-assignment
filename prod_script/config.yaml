@@ -10,11 +10,12 @@ primers_fasta:  primers/primers.fasta
 adapters_fasta: adapters/adapters.fasta
 
 # Script paths (relative to this config file / Snakefile location)
-assign_script:       scripts/assign_kinnex.py
-split_skera_script:  scripts/split_skera_by_library.py
-aggregate_script:    scripts/aggregate_flnc_qc.py
-pipeline_qc_script:  scripts/aggregate_pipeline_qc.py
-sankey_script:       scripts/generate_sankey.py
+assign_script:          scripts/assign_kinnex.py
+split_skera_script:     scripts/split_skera_by_library.py
+aggregate_script:       scripts/aggregate_flnc_qc.py
+pipeline_qc_script:     scripts/aggregate_pipeline_qc.py
+sankey_script:          scripts/generate_sankey.py
+plot_posteriors_script: scripts/plot_posteriors.py
 
 # IsoSeq Lima options (Lima pass 2)
 lima:
