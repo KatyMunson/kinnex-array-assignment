@@ -55,44 +55,55 @@ def load_assignment_data(assignment_file, lookup_file):
     
     return merged
 
-def plot_posterior_distributions(df, plot_path):
-    """Create comprehensive posterior distribution plots."""
-    
+def plot_posterior_distributions(df, plot_path, thresholds):
+    """Create comprehensive posterior distribution plots.
+
+    Parameters
+    ----------
+    thresholds : dict
+        Parsed header from utils.parse_assignment_header().  Keys used:
+        POSTERIOR_HIGH_CONF, POSTERIOR_LOW_CONF, MIN_OBS_HIGH_CONF.
+        Falls back to the assign_kinnex.py defaults if a key is absent.
+    """
+    p_hc     = float(thresholds.get('POSTERIOR_HIGH_CONF', 0.840))
+    p_lc     = float(thresholds.get('POSTERIOR_LOW_CONF',  0.50))
+    min_obs  = int(float(thresholds.get('MIN_OBS_HIGH_CONF', 3)))
+
     # Set style
     sns.set_style("whitegrid")
-    
+
     # Create figure with multiple subplots
     fig = plt.figure(figsize=(16, 12))
-    
+
     # 1. Overall posterior distribution by correctness
     ax1 = plt.subplot(2, 3, 1)
-    
+
     # Filter out posterior = 0 for better visualization
     df_filtered = df[df['Top_Posterior'] > 0].copy()
-    
+
     for correct in [True, False]:
         data = df_filtered[df_filtered['Correct'] == correct]['Top_Posterior']
         label = 'Correct' if correct else 'Incorrect'
         color = 'green' if correct else 'red'
-        # Use bins that focus on 0.5-1.0 where most data is
         ax1.hist(data, bins=50, range=(0.5, 1.0), alpha=0.6, label=label, color=color, density=True)
     ax1.set_xlim(0.5, 1.0)
     ax1.set_xlabel('Top Posterior')
     ax1.set_ylabel('Density')
     ax1.set_title('Overall Posterior Distribution (excluding 0)')
     ax1.legend()
-    ax1.axvline(x=0.89, color='blue', linestyle='--', alpha=0.5, linewidth=1)
-    ax1.axvline(x=0.93, color='purple', linestyle='--', alpha=0.5, linewidth=1)
-    ax1.axvline(x=0.6, color='green', linestyle='--', alpha=0.5, linewidth=1)
-    ax1.text(0.89, ax1.get_ylim()[1]*0.95, 'std', fontsize=8, ha='center')
-    ax1.text(0.93, ax1.get_ylim()[1]*0.85, 'relax', fontsize=8, ha='center')
-    ax1.text(0.6, ax1.get_ylim()[1]*0.75, 'lowconf', fontsize=8, ha='center')
-    
+    ax1.axvline(x=p_hc, color='blue',  linestyle='--', alpha=0.7, linewidth=1,
+                label=f'HIGH_CONF={p_hc}')
+    ax1.axvline(x=p_lc, color='orange', linestyle='--', alpha=0.7, linewidth=1,
+                label=f'LOW_CONF={p_lc}')
+    ymax = ax1.get_ylim()[1]
+    ax1.text(p_hc, ymax * 0.95, f'HC\n{p_hc}',  fontsize=7, ha='center', color='blue')
+    ax1.text(p_lc, ymax * 0.95, f'LC\n{p_lc}',  fontsize=7, ha='center', color='orange')
+
     # 2. HIGH_CONF only
     ax2 = plt.subplot(2, 3, 2)
     high_conf = df[df['Classification'] == 'HIGH_CONF']
     high_conf_filtered = high_conf[high_conf['Top_Posterior'] > 0].copy()
-    
+
     for correct in [True, False]:
         data = high_conf_filtered[high_conf_filtered['Correct'] == correct]['Top_Posterior']
         label = f'Correct (n={len(data)})'  if correct else f'Incorrect (n={len(data)})'
@@ -102,13 +113,15 @@ def plot_posterior_distributions(df, plot_path):
     ax2.set_xlabel('Top Posterior')
     ax2.set_ylabel('Density')
     ax2.set_title('HIGH_CONF Only (excluding 0)')
+    ax2.axvline(x=p_hc, color='blue', linestyle='--', alpha=0.7, linewidth=1,
+                label=f'HC threshold={p_hc}')
     ax2.legend()
-    
+
     # 3. LOW_CONF only
     ax3 = plt.subplot(2, 3, 3)
     low_conf = df[df['Classification'] == 'LOW_CONF']
     low_conf_filtered = low_conf[low_conf['Top_Posterior'] > 0].copy()
-    
+
     for correct in [True, False]:
         data = low_conf_filtered[low_conf_filtered['Correct'] == correct]['Top_Posterior']
         label = f'Correct (n={len(data)})' if correct else f'Incorrect (n={len(data)})'
@@ -118,30 +131,34 @@ def plot_posterior_distributions(df, plot_path):
     ax3.set_xlabel('Top Posterior')
     ax3.set_ylabel('Density')
     ax3.set_title('LOW_CONF Only (excluding 0)')
+    ax3.axvline(x=p_lc, color='orange', linestyle='--', alpha=0.7, linewidth=1,
+                label=f'LC threshold={p_lc}')
     ax3.legend()
-    
+
     # 4. Posterior vs Specific Barcodes (correct assignments)
     ax4 = plt.subplot(2, 3, 4)
     correct_df = df[df['Correct'] == True]
-    scatter = ax4.scatter(correct_df['Specific_Barcodes'], correct_df['Top_Posterior'],
-                         alpha=0.3, s=1, c='green')
+    ax4.scatter(correct_df['Specific_Barcodes'], correct_df['Top_Posterior'],
+                alpha=0.3, s=1, c='green')
     ax4.set_xlabel('Specific Barcodes')
     ax4.set_ylabel('Top Posterior')
     ax4.set_title('Correct Assignments')
-    ax4.axhline(y=0.89, color='blue', linestyle='--', alpha=0.5)
-    ax4.axhline(y=0.93, color='purple', linestyle='--', alpha=0.5)
-    
+    ax4.axhline(y=p_hc, color='blue',   linestyle='--', alpha=0.7, label=f'HC={p_hc}')
+    ax4.axhline(y=p_lc, color='orange', linestyle='--', alpha=0.7, label=f'LC={p_lc}')
+    ax4.legend(fontsize=7)
+
     # 5. Posterior vs Specific Barcodes (incorrect assignments)
     ax5 = plt.subplot(2, 3, 5)
     incorrect_df = df[df['Correct'] == False]
-    scatter = ax5.scatter(incorrect_df['Specific_Barcodes'], incorrect_df['Top_Posterior'],
-                         alpha=0.5, s=2, c='red')
+    ax5.scatter(incorrect_df['Specific_Barcodes'], incorrect_df['Top_Posterior'],
+                alpha=0.5, s=2, c='red')
     ax5.set_xlabel('Specific Barcodes')
     ax5.set_ylabel('Top Posterior')
     ax5.set_title(f'Incorrect Assignments (n={len(incorrect_df)})')
-    ax5.axhline(y=0.89, color='blue', linestyle='--', alpha=0.5)
-    ax5.axhline(y=0.93, color='purple', linestyle='--', alpha=0.5)
-    
+    ax5.axhline(y=p_hc, color='blue',   linestyle='--', alpha=0.7, label=f'HC={p_hc}')
+    ax5.axhline(y=p_lc, color='orange', linestyle='--', alpha=0.7, label=f'LC={p_lc}')
+    ax5.legend(fontsize=7)
+
     # 6. Segments per ZMW distribution
     ax6 = plt.subplot(2, 3, 6)
     for correct in [True, False]:
@@ -153,8 +170,9 @@ def plot_posterior_distributions(df, plot_path):
     ax6.set_ylabel('Density')
     ax6.set_title('Segments per ZMW Distribution')
     ax6.set_xticks(range(1, 9))
+    ax6.axvline(x=min_obs, color='blue', linestyle='--', alpha=0.7,
+                label=f'MIN_OBS_HC={min_obs}')
     ax6.legend()
-    ax6.axvline(x=3, color='blue', linestyle='--', alpha=0.5, label='3 segments')
     
     plt.tight_layout()
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
@@ -231,7 +249,15 @@ if __name__ == "__main__":
     threshold_path  = sys.argv[4]
 
     print(f"Loading data...")
+    thresholds = utils.parse_assignment_header(assignment_file)
     df = load_assignment_data(assignment_file, lookup_file)
+
+    print(f"\nThresholds from assignment header:")
+    for key in ('POSTERIOR_HIGH_CONF', 'POSTERIOR_LOW_CONF',
+                'MIN_OBS_HIGH_CONF', 'MIN_OBS_LOW_CONF',
+                'MIN_SPECIFIC_HIGH_CONF', 'MIN_SPECIFIC_LOW_CONF'):
+        if key in thresholds:
+            print(f"  {key} = {thresholds[key]}")
 
     print(f"\nDataset summary:")
     print(f"  Total reads: {len(df):,}")
@@ -245,7 +271,7 @@ if __name__ == "__main__":
     print(f"  Overall accuracy: {df['Correct'].sum()/len(df)*100:.2f}%")
 
     print(f"\nGenerating plots...")
-    plot_posterior_distributions(df, plot_path)
+    plot_posterior_distributions(df, plot_path, thresholds)
 
     print(f"\nThreshold analysis (HIGH_CONF only):")
     threshold_table = generate_threshold_table(df)
