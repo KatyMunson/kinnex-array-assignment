@@ -64,6 +64,8 @@ POSTERIOR_HIGH_CONF = 0.840
 POSTERIOR_LOW_CONF = 0.50
 MIN_OBS_HIGH_CONF = 3
 MIN_OBS_LOW_CONF = 2
+MIN_SPECIFIC_HIGH_CONF = 1   # require at least 1 specific barcode for HIGH_CONF
+MIN_SPECIFIC_LOW_CONF  = 0   # no specific-barcode floor for LOW_CONF
 
 # =======================
 # INPUT FUNCTIONS
@@ -140,9 +142,11 @@ def classify_single_tier(barcodes, arrays_subset, all_arrays):
     res = array_scores[best_array]
     posterior = res['posterior']
     
-    if (n_obs >= MIN_OBS_HIGH_CONF and posterior >= POSTERIOR_HIGH_CONF):
+    if (n_obs >= MIN_OBS_HIGH_CONF and posterior >= POSTERIOR_HIGH_CONF
+            and res['specific'] >= MIN_SPECIFIC_HIGH_CONF):
         classification = "HIGH_CONF"
-    elif (n_obs >= MIN_OBS_LOW_CONF and posterior >= POSTERIOR_LOW_CONF):
+    elif (n_obs >= MIN_OBS_LOW_CONF and posterior >= POSTERIOR_LOW_CONF
+            and res['specific'] >= MIN_SPECIFIC_LOW_CONF):
         classification = "LOW_CONF"
     else:
         classification, best_array, posterior = "UNASSIGNED", None, 0.0
@@ -210,6 +214,7 @@ def main():
         out_f.write(f"# SPECIFIC_WEIGHT={SPECIFIC_WEIGHT}  MAX_SHARED_WEIGHT={MAX_SHARED_WEIGHT}  DISCORDANT_PENALTY={DISCORDANT_PENALTY}\n")
         out_f.write(f"# POSTERIOR_HIGH_CONF={POSTERIOR_HIGH_CONF}  POSTERIOR_LOW_CONF={POSTERIOR_LOW_CONF}\n")
         out_f.write(f"# MIN_OBS_HIGH_CONF={MIN_OBS_HIGH_CONF}  MIN_OBS_LOW_CONF={MIN_OBS_LOW_CONF}\n")
+        out_f.write(f"# MIN_SPECIFIC_HIGH_CONF={MIN_SPECIFIC_HIGH_CONF}  MIN_SPECIFIC_LOW_CONF={MIN_SPECIFIC_LOW_CONF}\n")
         out_f.write("ZMW\tAssigned_Array\tClassification\tTop_Posterior\tN_Observations\tSpecific_Barcodes\tShared_Barcodes\tDiscordant_Barcodes\tArray_Kinnex\tAll_Barcodes\n")
         for zmw, barcodes, best_array, classification, posterior, summary in results:
             out_f.write(f"{zmw}\t{best_array}\t{classification}\t{posterior:.3f}\t{len(barcodes)}\t{summary['specific']}\t{summary['shared']}\t{summary['discordant']}\t{summary['kinnex']}\t{','.join(barcodes)}\n")

@@ -96,10 +96,12 @@ POSTERIOR_HIGH_CONF = 0.840
 POSTERIOR_LOW_CONF = 0.50
 MIN_OBS_HIGH_CONF = 3
 MIN_OBS_LOW_CONF = 2
+MIN_SPECIFIC_HIGH_CONF = 1
+MIN_SPECIFIC_LOW_CONF  = 0
 ```
 
 **Classification tiers**:
-- `HIGH_CONF`: posterior ≥ 0.840 AND total observations ≥ 3
+- `HIGH_CONF`: posterior ≥ 0.840 AND total observations ≥ 3 AND specific barcodes ≥ 1
 - `LOW_CONF`: posterior ≥ 0.50 AND total observations ≥ 2
 - `UNASSIGNED`: below thresholds
 
