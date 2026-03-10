@@ -23,6 +23,10 @@ Created: 2026-02
 import argparse
 import json
 import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../prod_script/scripts'))
+import utils
+
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -43,11 +47,18 @@ def load_data(assignment_files, lookup_files):
     
     print(f"Loaded {len(lookup_map):,} ground truth ZMWs")
     
-    # Load assignments
+    # Load assignments — warn if files were produced with different parameters
+    seen_params = {}
     all_data = []
     for assign_file in assignment_files:
         print(f"Processing {assign_file}...")
-        df = pd.read_csv(assign_file, sep='\t', dtype=str, comment='#')
+        header = utils.parse_assignment_header(assign_file)
+        param_sig = {k: v for k, v in header.items() if k not in ('run_date', 'git')}
+        if seen_params and param_sig != seen_params:
+            print(f"WARNING: {Path(assign_file).name} has different scoring parameters "
+                  f"than previous files — mixing may produce inconsistent results.", flush=True)
+        seen_params = param_sig
+        df = utils.load_assignments_df(assign_file)
         df['Top_Posterior'] = pd.to_numeric(df['Top_Posterior'], errors='coerce')
         
         for _, row in df.iterrows():

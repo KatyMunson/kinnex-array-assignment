@@ -25,6 +25,10 @@ Created: 2026-02
 import argparse
 import json
 import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../prod_script/scripts'))
+import utils
+
 from pathlib import Path
 from collections import defaultdict, Counter
 import numpy as np
@@ -37,21 +41,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
-
-
-def read_arrays(arrays_file):
-    """Read array definitions."""
-    arrays = {}
-    with open(arrays_file) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) < 3:
-                continue
-            arrays[parts[0]] = {
-                'kinnex': parts[1],
-                'barcodes': set(parts[2:])
-            }
-    return arrays
 
 
 def load_training_data(assignment_files, lookup_files, arrays):
@@ -74,11 +63,18 @@ def load_training_data(assignment_files, lookup_files, arrays):
     
     print(f"Loaded {len(lookup_map):,} ground truth ZMWs")
     
-    # Process assignment files
+    # Process assignment files — warn if files were produced with different parameters
+    seen_params = {}
     for assign_file in assignment_files:
         pool_name = Path(assign_file).stem   # e.g. TRAIN_3way_KN_bcM0010
         print(f"Processing {assign_file}...")
-        df = pd.read_csv(assign_file, sep='\t', dtype=str, comment='#')
+        header = utils.parse_assignment_header(assign_file)
+        param_sig = {k: v for k, v in header.items() if k not in ('run_date', 'git')}
+        if seen_params and param_sig != seen_params:
+            print(f"WARNING: {Path(assign_file).name} has different scoring parameters "
+                  f"than previous files — mixing may produce inconsistent results.", flush=True)
+        seen_params = param_sig
+        df = utils.load_assignments_df(assign_file)
         
         # Convert numeric columns
         df['Top_Posterior'] = pd.to_numeric(df['Top_Posterior'], errors='coerce')
@@ -941,7 +937,7 @@ def main():
     print(f"Found {len(lookup_files)} lookup files")
     
     # Load data
-    arrays = read_arrays(args.arrays)
+    arrays = utils.read_arrays(args.arrays)
     print(f"Loaded {len(arrays)} array definitions")
     
     training_data = load_training_data(assignment_files, lookup_files, arrays)

@@ -14,11 +14,14 @@ Author:  KM
 Created: 2026-02
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../prod_script/scripts'))
+import utils
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import sys
-import os
 from pathlib import Path
 import numpy as np
 
@@ -26,7 +29,7 @@ def load_assignment_data(assignment_file, lookup_file):
     """Load and merge assignment results with ground truth."""
     # Load data
     truth_df = pd.read_csv(lookup_file, sep="\t", dtype=str)
-    assign_df = pd.read_csv(assignment_file, sep="\t", dtype=str, comment='#')
+    assign_df = utils.load_assignments_df(assignment_file)
     
     # Strip /ccs suffix from truth
     truth_df['Read'] = truth_df['Read'].str.replace('/ccs', '', regex=False)
