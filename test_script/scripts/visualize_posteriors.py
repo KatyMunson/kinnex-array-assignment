@@ -37,8 +37,8 @@ def load_assignment_data(assignment_file, lookup_file):
     
     # Convert numeric columns
     merged['Top_Posterior'] = pd.to_numeric(merged['Top_Posterior'])
-    merged['Informative_Barcodes'] = pd.to_numeric(merged['Informative_Barcodes'])
-    merged['Uninformative_Barcodes'] = pd.to_numeric(merged['Uninformative_Barcodes'])
+    merged['Specific_Barcodes'] = pd.to_numeric(merged['Specific_Barcodes'])
+    merged['Shared_Barcodes']   = pd.to_numeric(merged['Shared_Barcodes'])
     
     # Calculate segments per ZMW from All_Barcodes column
     merged['Segments_per_ZMW'] = merged['All_Barcodes'].str.count(',') + 1
@@ -46,9 +46,9 @@ def load_assignment_data(assignment_file, lookup_file):
     # Add correctness flag
     merged['Correct'] = merged['Assigned_Array'] == merged['KinnexLib']
     
-    # Add total barcodes and informative fraction
-    merged['Total_Barcodes'] = merged['Informative_Barcodes'] + merged['Uninformative_Barcodes']
-    merged['Informative_Fraction'] = merged['Informative_Barcodes'] / merged['Total_Barcodes']
+    # Add total barcodes and specific fraction
+    merged['Total_Barcodes']    = merged['Specific_Barcodes'] + merged['Shared_Barcodes']
+    merged['Specific_Fraction'] = merged['Specific_Barcodes'] / merged['Total_Barcodes']
     
     return merged
 
@@ -120,9 +120,9 @@ def plot_posterior_distributions(df, plot_path):
     # 4. Posterior vs Informative Barcodes (correct assignments)
     ax4 = plt.subplot(2, 3, 4)
     correct_df = df[df['Correct'] == True]
-    scatter = ax4.scatter(correct_df['Informative_Barcodes'], correct_df['Top_Posterior'], 
+    scatter = ax4.scatter(correct_df['Specific_Barcodes'], correct_df['Top_Posterior'],
                          alpha=0.3, s=1, c='green')
-    ax4.set_xlabel('Informative Barcodes')
+    ax4.set_xlabel('Specific Barcodes')
     ax4.set_ylabel('Top Posterior')
     ax4.set_title('Correct Assignments')
     ax4.axhline(y=0.89, color='blue', linestyle='--', alpha=0.5)
@@ -131,9 +131,9 @@ def plot_posterior_distributions(df, plot_path):
     # 5. Posterior vs Informative Barcodes (incorrect assignments)
     ax5 = plt.subplot(2, 3, 5)
     incorrect_df = df[df['Correct'] == False]
-    scatter = ax5.scatter(incorrect_df['Informative_Barcodes'], incorrect_df['Top_Posterior'], 
+    scatter = ax5.scatter(incorrect_df['Specific_Barcodes'], incorrect_df['Top_Posterior'],
                          alpha=0.5, s=2, c='red')
-    ax5.set_xlabel('Informative Barcodes')
+    ax5.set_xlabel('Specific Barcodes')
     ax5.set_ylabel('Top Posterior')
     ax5.set_title(f'Incorrect Assignments (n={len(incorrect_df)})')
     ax5.axhline(y=0.89, color='blue', linestyle='--', alpha=0.5)
@@ -165,31 +165,31 @@ def generate_threshold_table(df):
     high_conf_df = df[df['Classification'] == 'HIGH_CONF'].copy()
     
     thresholds = [
-        {'name': 'Current HIGH_CONF', 'posterior': 0.0, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Posterior ≥ 0.90', 'posterior': 0.90, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Posterior ≥ 0.95', 'posterior': 0.95, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Posterior ≥ 0.99', 'posterior': 0.99, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'InfBC ≥ 2', 'posterior': 0.0, 'min_inf_bc': 2, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'InfBC ≥ 3', 'posterior': 0.0, 'min_inf_bc': 3, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Segments ≥ 3', 'posterior': 0.0, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 3},
-        {'name': 'Segments ≥ 4', 'posterior': 0.0, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 4},
-        {'name': 'InfFrac ≥ 0.5', 'posterior': 0.0, 'min_inf_bc': 0, 'inf_frac': 0.5, 'min_segments': 0},
-        {'name': 'Post≥0.95 + InfBC≥3', 'posterior': 0.95, 'min_inf_bc': 3, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Post≥0.95 + Seg≥3', 'posterior': 0.95, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 3},
-        {'name': 'Post≥0.99 + Seg≥3', 'posterior': 0.99, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 3},
-        {'name': 'Post≥0.95 + InfFrac≥0.5', 'posterior': 0.95, 'min_inf_bc': 0, 'inf_frac': 0.5, 'min_segments': 0},
-        {'name': 'Conservative', 'posterior': 0.95, 'min_inf_bc': 3, 'inf_frac': 0.5, 'min_segments': 0},
-        {'name': 'Ultra-Conservative', 'posterior': 0.99, 'min_inf_bc': 3, 'inf_frac': 0.5, 'min_segments': 3},
+        {'name': 'Current HIGH_CONF',       'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Posterior ≥ 0.90',        'posterior': 0.90, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Posterior ≥ 0.95',        'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Posterior ≥ 0.99',        'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'SpecBC ≥ 2',              'posterior': 0.0,  'min_specific_bc': 2, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'SpecBC ≥ 3',              'posterior': 0.0,  'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Segments ≥ 3',            'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+        {'name': 'Segments ≥ 4',            'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 4},
+        {'name': 'SpecFrac ≥ 0.5',          'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.5, 'min_segments': 0},
+        {'name': 'Post≥0.95 + SpecBC≥3',   'posterior': 0.95, 'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Post≥0.95 + Seg≥3',      'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+        {'name': 'Post≥0.99 + Seg≥3',      'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+        {'name': 'Post≥0.95 + SpecFrac≥0.5','posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.5, 'min_segments': 0},
+        {'name': 'Conservative',            'posterior': 0.95, 'min_specific_bc': 3, 'specific_frac': 0.5, 'min_segments': 0},
+        {'name': 'Ultra-Conservative',      'posterior': 0.99, 'min_specific_bc': 3, 'specific_frac': 0.5, 'min_segments': 3},
     ]
     
     results = []
     
     for thresh in thresholds:
         # Apply filters to HIGH_CONF only
-        mask = (high_conf_df['Top_Posterior'] >= thresh['posterior']) & \
-               (high_conf_df['Informative_Barcodes'] >= thresh['min_inf_bc']) & \
-               (high_conf_df['Informative_Fraction'] >= thresh['inf_frac']) & \
-               (high_conf_df['Segments_per_ZMW'] >= thresh['min_segments'])
+        mask = (high_conf_df['Top_Posterior']    >= thresh['posterior']) & \
+               (high_conf_df['Specific_Barcodes'] >= thresh['min_specific_bc']) & \
+               (high_conf_df['Specific_Fraction'] >= thresh['specific_frac']) & \
+               (high_conf_df['Segments_per_ZMW']  >= thresh['min_segments'])
         
         filtered = high_conf_df[mask]
         

@@ -128,9 +128,9 @@ rule check_assignments:
 
         merged = pd.merge(assign_df, truth_df, on="ZMW", how="left")
         merged['Top_Posterior'] = pd.to_numeric(merged['Top_Posterior'], errors='coerce')
-        merged['Informative_Barcodes'] = pd.to_numeric(merged['Informative_Barcodes'], errors='coerce')
-        merged['Uninformative_Barcodes'] = pd.to_numeric(merged['Uninformative_Barcodes'], errors='coerce')
-        merged['Informative_Fraction'] = merged['Informative_Barcodes'] / (merged['Informative_Barcodes'] + merged['Uninformative_Barcodes'])
+        merged['Specific_Barcodes'] = pd.to_numeric(merged['Specific_Barcodes'], errors='coerce')
+        merged['Shared_Barcodes']   = pd.to_numeric(merged['Shared_Barcodes'],   errors='coerce')
+        merged['Specific_Fraction'] = merged['Specific_Barcodes'] / (merged['Specific_Barcodes'] + merged['Shared_Barcodes'])
         merged['Correct'] = merged['Assigned_Array'] == merged['KinnexLib']
 
         counts = {"HIGH_CONF_correct": 0, "HIGH_CONF_incorrect": 0,
@@ -147,8 +147,8 @@ rule check_assignments:
             zmw = row["ZMW"]
             segments = row["Segments_per_ZMW"]
             top_posterior = row.get("Top_Posterior", "N/A")
-            inf_bc = row.get("Informative_Barcodes", "N/A")
-            uninf_bc = row.get("Uninformative_Barcodes", "N/A")
+            specific_bc = row.get("Specific_Barcodes", "N/A")
+            shared_bc   = row.get("Shared_Barcodes",   "N/A")
             all_bc = row.get("All_Barcodes", "N/A")
 
             if cls == "HIGH_CONF":
@@ -162,7 +162,7 @@ rule check_assignments:
                         "ZMW": zmw, "Segments": segments,
                         "True_Library": true_lib, "Assigned_Library": assigned,
                         "Top_Posterior": top_posterior,
-                        "Informative_BC": inf_bc, "Uninformative_BC": uninf_bc,
+                        "Specific_BC": specific_bc, "Shared_BC": shared_bc,
                         "All_Barcodes": all_bc
                     })
             elif cls == "LOW_CONF":
@@ -176,7 +176,7 @@ rule check_assignments:
                         "ZMW": zmw, "Segments": segments,
                         "True_Library": true_lib, "Assigned_Library": assigned,
                         "Top_Posterior": top_posterior,
-                        "Informative_BC": inf_bc, "Uninformative_BC": uninf_bc,
+                        "Specific_BC": specific_bc, "Shared_BC": shared_bc,
                         "All_Barcodes": all_bc
                     })
             elif cls == "UNASSIGNED":
@@ -192,8 +192,8 @@ rule check_assignments:
                 f.write(f"  True Library:     {err['True_Library']}\n")
                 f.write(f"  Assigned Library: {err['Assigned_Library']}\n")
                 f.write(f"  Top Posterior:    {err['Top_Posterior']}\n")
-                f.write(f"  Informative BC:   {err['Informative_BC']}\n")
-                f.write(f"  Uninformative BC: {err['Uninformative_BC']}\n")
+                f.write(f"  Specific BC:      {err['Specific_BC']}\n")
+                f.write(f"  Shared BC:        {err['Shared_BC']}\n")
                 f.write(f"  All Barcodes:     {err['All_Barcodes']}\n\n")
             if len(high_conf_errors) > 50:
                 f.write(f"... and {len(high_conf_errors) - 50} more ZMWs\n\n")
@@ -204,8 +204,8 @@ rule check_assignments:
                 f.write(f"  True Library:     {err['True_Library']}\n")
                 f.write(f"  Assigned Library: {err['Assigned_Library']}\n")
                 f.write(f"  Top Posterior:    {err['Top_Posterior']}\n")
-                f.write(f"  Informative BC:   {err['Informative_BC']}\n")
-                f.write(f"  Uninformative BC: {err['Uninformative_BC']}\n")
+                f.write(f"  Specific BC:      {err['Specific_BC']}\n")
+                f.write(f"  Shared BC:        {err['Shared_BC']}\n")
                 f.write(f"  All Barcodes:     {err['All_Barcodes']}\n\n")
             if len(low_conf_errors) > 50:
                 f.write(f"... and {len(low_conf_errors) - 50} more ZMWs\n")
@@ -230,17 +230,17 @@ rule check_assignments:
 
         # Threshold analysis
         thresholds = [
-            {'name': 'Current HIGH_CONF', 'posterior': 0.0, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-            {'name': 'Posterior >= 0.90', 'posterior': 0.90, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-            {'name': 'Posterior >= 0.95', 'posterior': 0.95, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-            {'name': 'Posterior >= 0.99', 'posterior': 0.99, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-            {'name': 'InfBC >= 2',        'posterior': 0.0,  'min_inf_bc': 2, 'inf_frac': 0.0, 'min_segments': 0},
-            {'name': 'InfBC >= 3',        'posterior': 0.0,  'min_inf_bc': 3, 'inf_frac': 0.0, 'min_segments': 0},
-            {'name': 'Segments >= 3',     'posterior': 0.0,  'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 3},
-            {'name': 'Segments >= 4',     'posterior': 0.0,  'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 4},
-            {'name': 'Post>=0.95+InfBC>=3','posterior': 0.95,'min_inf_bc': 3, 'inf_frac': 0.0, 'min_segments': 0},
-            {'name': 'Post>=0.95+Seg>=3', 'posterior': 0.95, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 3},
-            {'name': 'Post>=0.99+Seg>=3', 'posterior': 0.99, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 3},
+            {'name': 'Current HIGH_CONF',      'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+            {'name': 'Posterior >= 0.90',      'posterior': 0.90, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+            {'name': 'Posterior >= 0.95',      'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+            {'name': 'Posterior >= 0.99',      'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+            {'name': 'SpecBC >= 2',            'posterior': 0.0,  'min_specific_bc': 2, 'specific_frac': 0.0, 'min_segments': 0},
+            {'name': 'SpecBC >= 3',            'posterior': 0.0,  'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
+            {'name': 'Segments >= 3',          'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+            {'name': 'Segments >= 4',          'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 4},
+            {'name': 'Post>=0.95+SpecBC>=3',   'posterior': 0.95, 'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
+            {'name': 'Post>=0.95+Seg>=3',      'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+            {'name': 'Post>=0.99+Seg>=3',      'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
         ]
 
         high_conf_df = merged[merged['Classification'] == 'HIGH_CONF'].copy()
@@ -248,8 +248,8 @@ rule check_assignments:
         for thresh in thresholds:
             mask = (
                 (high_conf_df['Top_Posterior'] >= thresh['posterior']) &
-                (high_conf_df['Informative_Barcodes'] >= thresh['min_inf_bc']) &
-                (high_conf_df['Informative_Fraction'] >= thresh['inf_frac']) &
+                (high_conf_df['Specific_Barcodes'] >= thresh['min_specific_bc']) &
+                (high_conf_df['Specific_Fraction'] >= thresh['specific_frac']) &
                 (high_conf_df['Segments_per_ZMW'] >= thresh['min_segments'])
             )
             filtered = high_conf_df[mask]
@@ -327,9 +327,9 @@ if REFINE_DIR:
             assign_df['Segments_per_ZMW'] = assign_df['All_Barcodes'].str.count(',') + 1
             merged = pd.merge(assign_df, truth_df, on="ZMW", how="left")
             merged['Top_Posterior'] = pd.to_numeric(merged['Top_Posterior'], errors='coerce')
-            merged['Informative_Barcodes'] = pd.to_numeric(merged['Informative_Barcodes'], errors='coerce')
-            merged['Informative_Fraction'] = merged['Informative_Barcodes'] / (
-                merged['Informative_Barcodes'] + pd.to_numeric(merged['Uninformative_Barcodes'], errors='coerce')
+            merged['Specific_Barcodes'] = pd.to_numeric(merged['Specific_Barcodes'], errors='coerce')
+            merged['Specific_Fraction'] = merged['Specific_Barcodes'] / (
+                merged['Specific_Barcodes'] + pd.to_numeric(merged['Shared_Barcodes'], errors='coerce')
             )
             merged['Correct'] = merged['Assigned_Array'] == merged['KinnexLib']
 
@@ -418,23 +418,23 @@ if REFINE_DIR:
             # FLNC-aware threshold analysis
             high_conf_df = merged[merged['Classification'] == 'HIGH_CONF'].copy()
             thresholds = [
-                {'name': 'Current HIGH_CONF', 'posterior': 0.0, 'min_inf_bc': 0, 'min_segments': 0},
-                {'name': 'Posterior >= 0.90', 'posterior': 0.90, 'min_inf_bc': 0, 'min_segments': 0},
-                {'name': 'Posterior >= 0.95', 'posterior': 0.95, 'min_inf_bc': 0, 'min_segments': 0},
-                {'name': 'Posterior >= 0.99', 'posterior': 0.99, 'min_inf_bc': 0, 'min_segments': 0},
-                {'name': 'InfBC >= 2',        'posterior': 0.0,  'min_inf_bc': 2, 'min_segments': 0},
-                {'name': 'InfBC >= 3',        'posterior': 0.0,  'min_inf_bc': 3, 'min_segments': 0},
-                {'name': 'Segments >= 3',     'posterior': 0.0,  'min_inf_bc': 0, 'min_segments': 3},
-                {'name': 'Segments >= 4',     'posterior': 0.0,  'min_inf_bc': 0, 'min_segments': 4},
-                {'name': 'Post>=0.95+InfBC>=3','posterior': 0.95,'min_inf_bc': 3, 'min_segments': 0},
-                {'name': 'Post>=0.95+Seg>=3', 'posterior': 0.95, 'min_inf_bc': 0, 'min_segments': 3},
-                {'name': 'Post>=0.99+Seg>=3', 'posterior': 0.99, 'min_inf_bc': 0, 'min_segments': 3},
+                {'name': 'Current HIGH_CONF',    'posterior': 0.0,  'min_specific_bc': 0, 'min_segments': 0},
+                {'name': 'Posterior >= 0.90',    'posterior': 0.90, 'min_specific_bc': 0, 'min_segments': 0},
+                {'name': 'Posterior >= 0.95',    'posterior': 0.95, 'min_specific_bc': 0, 'min_segments': 0},
+                {'name': 'Posterior >= 0.99',    'posterior': 0.99, 'min_specific_bc': 0, 'min_segments': 0},
+                {'name': 'SpecBC >= 2',          'posterior': 0.0,  'min_specific_bc': 2, 'min_segments': 0},
+                {'name': 'SpecBC >= 3',          'posterior': 0.0,  'min_specific_bc': 3, 'min_segments': 0},
+                {'name': 'Segments >= 3',        'posterior': 0.0,  'min_specific_bc': 0, 'min_segments': 3},
+                {'name': 'Segments >= 4',        'posterior': 0.0,  'min_specific_bc': 0, 'min_segments': 4},
+                {'name': 'Post>=0.95+SpecBC>=3', 'posterior': 0.95, 'min_specific_bc': 3, 'min_segments': 0},
+                {'name': 'Post>=0.95+Seg>=3',    'posterior': 0.95, 'min_specific_bc': 0, 'min_segments': 3},
+                {'name': 'Post>=0.99+Seg>=3',    'posterior': 0.99, 'min_specific_bc': 0, 'min_segments': 3},
             ]
             threshold_results = []
             for thresh in thresholds:
                 mask = (
-                    (high_conf_df['Top_Posterior'] >= thresh['posterior']) &
-                    (high_conf_df['Informative_Barcodes'] >= thresh['min_inf_bc']) &
+                    (high_conf_df['Top_Posterior']    >= thresh['posterior']) &
+                    (high_conf_df['Specific_Barcodes'] >= thresh['min_specific_bc']) &
                     (high_conf_df['Segments_per_ZMW'] >= thresh['min_segments'])
                 )
                 filtered = high_conf_df[mask]

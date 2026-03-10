@@ -80,18 +80,18 @@ library_name    KN_BC    barcode1    barcode2    ...
 The Bayesian scorer computes a score per library for each ZMW:
 
 ```
-score = Σ(informative_barcodes * INF_WEIGHT)
-      + Σ(shared_barcodes * min(1.0/count, MAX_UNINF_WEIGHT))
-      + Σ(extraneous_barcodes * EXTRANEOUS_PENALTY)
+score = Σ(specific_barcodes * SPECIFIC_WEIGHT)
+      + Σ(shared_barcodes * min(1.0/count, MAX_SHARED_WEIGHT))
+      + Σ(discordant_barcodes * DISCORDANT_PENALTY)
 ```
 
 Posteriors are computed via softmax over library scores.
 
 **Default thresholds** (hardcoded constants, optimizable via `train_script/`):
 ```python
-INF_WEIGHT = 1.0
-MAX_UNINF_WEIGHT = 0.2
-EXTRANEOUS_PENALTY = -0.10
+SPECIFIC_WEIGHT = 1.0
+MAX_SHARED_WEIGHT = 0.2
+DISCORDANT_PENALTY = -0.10
 POSTERIOR_HIGH_CONF = 0.840
 POSTERIOR_LOW_CONF = 0.50
 MIN_OBS_HIGH_CONF = 3

@@ -82,9 +82,9 @@ def load_training_data(assignment_files, lookup_files, arrays):
         
         # Convert numeric columns
         df['Top_Posterior'] = pd.to_numeric(df['Top_Posterior'], errors='coerce')
-        df['Informative_Barcodes'] = pd.to_numeric(df['Informative_Barcodes'], errors='coerce')
-        df['Uninformative_Barcodes'] = pd.to_numeric(df['Uninformative_Barcodes'], errors='coerce')
-        df['Extraneous_Barcodes'] = pd.to_numeric(df['Extraneous_Barcodes'], errors='coerce')
+        df['Specific_Barcodes'] = pd.to_numeric(df['Specific_Barcodes'], errors='coerce')
+        df['Shared_Barcodes'] = pd.to_numeric(df['Shared_Barcodes'], errors='coerce')
+        df['Discordant_Barcodes'] = pd.to_numeric(df['Discordant_Barcodes'], errors='coerce')
         
         for _, row in df.iterrows():
             zmw = row['ZMW']
@@ -121,9 +121,9 @@ def load_training_data(assignment_files, lookup_files, arrays):
                 'classification': classification,
                 'assigned': assigned_array,
                 'true': true_array,
-                'n_inf':   float(row['Informative_Barcodes']),
-                'n_uninf': float(row['Uninformative_Barcodes']),
-                'n_extr':  float(row['Extraneous_Barcodes']),
+                'n_specific':   float(row['Specific_Barcodes']),
+                'n_shared':     float(row['Shared_Barcodes']),
+                'n_discordant': float(row['Discordant_Barcodes']),
                 'posterior': float(row['Top_Posterior']),
             })
     
@@ -136,17 +136,17 @@ def extract_features(zmw, barcodes, assigned_array, true_array, arrays, classifi
     Extract features for ML model.
     
     Features:
-    - Raw counts: inf, uninf, extr barcodes
-    - Ratios: inf/total, uninf/total, extr/total
+    - Raw counts: specific, shared, discordant barcodes
+    - Ratios: specific/total, shared/total, discordant/total
     - Segment count
     - Barcode diversity (unique barcodes / total)
     - Evidence strength metrics
     """
     n_segments = len(barcodes)
-    n_inf = row['Informative_Barcodes']
-    n_uninf = row['Uninformative_Barcodes']
-    n_extr = row['Extraneous_Barcodes']
-    n_total_bc = n_inf + n_uninf + n_extr
+    n_specific   = row['Specific_Barcodes']
+    n_shared     = row['Shared_Barcodes']
+    n_discordant = row['Discordant_Barcodes']
+    n_total_bc = n_specific + n_shared + n_discordant
     
     # Barcode diversity
     bc_counter = Counter(barcodes)
@@ -163,15 +163,15 @@ def extract_features(zmw, barcodes, assigned_array, true_array, arrays, classifi
     # Build feature vector
     features = {
         # Raw counts
-        'n_segments': n_segments,
-        'n_inf': n_inf,
-        'n_uninf': n_uninf,
-        'n_extr': n_extr,
-        
+        'n_segments':    n_segments,
+        'n_specific':    n_specific,
+        'n_shared':      n_shared,
+        'n_discordant':  n_discordant,
+
         # Ratios (avoid division by zero)
-        'inf_frac': n_inf / max(n_total_bc, 1),
-        'uninf_frac': n_uninf / max(n_total_bc, 1),
-        'extr_frac': n_extr / max(n_total_bc, 1),
+        'specific_frac':    n_specific   / max(n_total_bc, 1),
+        'shared_frac':      n_shared     / max(n_total_bc, 1),
+        'discordant_frac':  n_discordant / max(n_total_bc, 1),
         
         # Barcode diversity
         'unique_bc_count': n_unique_bc,
@@ -184,9 +184,9 @@ def extract_features(zmw, barcodes, assigned_array, true_array, arrays, classifi
         'true_unique_bc': true_unique_bc,
         
         # Interaction terms
-        'inf_times_segments': n_inf * n_segments,
-        'extr_times_segments': n_extr * n_segments,
-        'inf_minus_extr': n_inf - n_extr,
+        'specific_times_segments':    n_specific   * n_segments,
+        'discordant_times_segments':  n_discordant * n_segments,
+        'specific_minus_discordant':  n_specific   - n_discordant,
         
         # Posterior from current algorithm
         'current_posterior': row['Top_Posterior'],
@@ -281,7 +281,7 @@ def analyze_errors(model, feature_names, training_data, arrays):
             print(f"  ZMW: {d['zmw'][:50]}")
             print(f"    True: {d['true']}, Assigned: {d['assigned']}, Class: {d['classification']}")
             print(f"    Model prob: {probabilities[idx]:.3f}")
-            print(f"    Features: inf={d['features']['n_inf']}, uninf={d['features']['n_uninf']}, extr={d['features']['n_extr']}")
+            print(f"    Features: specific={d['features']['n_specific']}, shared={d['features']['n_shared']}, discordant={d['features']['n_discordant']}")
     
     # False Negatives: Model predicts wrong, but it's actually correct
     fn_indices = np.where((predictions == 0) & (y == 1))[0]
@@ -318,38 +318,38 @@ def extract_weight_recommendations(model, feature_names, model_type='logistic'):
         feature_dict = dict(zip(feature_names, coef))
         
         print("\nLogistic Regression Coefficients (higher = more important for correct assignment):")
-        print(f"  Informative BC fraction:   {feature_dict.get('inf_frac', 0):+.4f}")
-        print(f"  Uninformative BC fraction: {feature_dict.get('uninf_frac', 0):+.4f}")
-        print(f"  Extraneous BC fraction:    {feature_dict.get('extr_frac', 0):+.4f}")
-        print(f"  Inf - Extr balance:        {feature_dict.get('inf_minus_extr', 0):+.4f}")
+        print(f"  Specific BC fraction:    {feature_dict.get('specific_frac', 0):+.4f}")
+        print(f"  Shared BC fraction:      {feature_dict.get('shared_frac', 0):+.4f}")
+        print(f"  Discordant BC fraction:  {feature_dict.get('discordant_frac', 0):+.4f}")
+        print(f"  Specific - Discordant:   {feature_dict.get('specific_minus_discordant', 0):+.4f}")
         print(f"  True match fraction:       {feature_dict.get('true_match_frac', 0):+.4f}")
         
         # Translate to weight recommendations
         print("\nSuggested Weight Adjustments:")
         
         # Current weights
-        current_inf = 1.0
-        current_uninf = 0.5
-        current_extr = -1.0
-        
+        current_specific   = 1.0
+        current_shared     = 0.5
+        current_discordant = -1.0
+
         # Scale based on relative coefficients
-        inf_coef = feature_dict.get('inf_frac', 1.0)
-        uninf_coef = feature_dict.get('uninf_frac', 0.5)
-        extr_coef = feature_dict.get('extr_frac', -1.0)
-        
-        # Normalize to keep informative at 1.0 as reference
-        scale = abs(inf_coef) if abs(inf_coef) > 0 else 1.0
-        
+        specific_coef   = feature_dict.get('specific_frac', 1.0)
+        shared_coef     = feature_dict.get('shared_frac', 0.5)
+        discordant_coef = feature_dict.get('discordant_frac', -1.0)
+
+        # Normalize to keep specific at 1.0 as reference
+        scale = abs(specific_coef) if abs(specific_coef) > 0 else 1.0
+
         recommended = {
-            'INF_WEIGHT': current_inf,  # Keep as reference
-            'MAX_UNINF_WEIGHT': max(0.01, abs(uninf_coef / scale) * current_uninf),
-            'EXTRANEOUS_PENALTY': min(-0.1, (extr_coef / scale) * abs(current_extr)),
+            'SPECIFIC_WEIGHT':    current_specific,  # Keep as reference
+            'MAX_SHARED_WEIGHT':  max(0.01, abs(shared_coef / scale) * current_shared),
+            'DISCORDANT_PENALTY': min(-0.1, (discordant_coef / scale) * abs(current_discordant)),
             'CONFIDENCE': 'medium'
         }
-        
-        print(f"  INF_WEIGHT:        {recommended['INF_WEIGHT']:.2f} (unchanged, reference)")
-        print(f"  MAX_UNINF_WEIGHT:  {recommended['MAX_UNINF_WEIGHT']:.2f} (current: {current_uninf})")
-        print(f"  EXTRANEOUS_PENALTY: {recommended['EXTRANEOUS_PENALTY']:.2f} (current: {current_extr})")
+
+        print(f"  SPECIFIC_WEIGHT:    {recommended['SPECIFIC_WEIGHT']:.2f} (unchanged, reference)")
+        print(f"  MAX_SHARED_WEIGHT:  {recommended['MAX_SHARED_WEIGHT']:.2f} (current: {current_shared})")
+        print(f"  DISCORDANT_PENALTY: {recommended['DISCORDANT_PENALTY']:.2f} (current: {current_discordant})")
         
     else:  # Random Forest
         # For RF, we can't directly extract weight recommendations
@@ -358,14 +358,14 @@ def extract_weight_recommendations(model, feature_names, model_type='logistic'):
         feature_importance = dict(zip(feature_names, importance))
         
         print("\nRandom Forest Feature Importance:")
-        print(f"  Informative BC fraction:   {feature_importance.get('inf_frac', 0):.4f}")
-        print(f"  Uninformative BC fraction: {feature_importance.get('uninf_frac', 0):.4f}")
-        print(f"  Extraneous BC fraction:    {feature_importance.get('extr_frac', 0):.4f}")
-        
+        print(f"  Specific BC fraction:    {feature_importance.get('specific_frac', 0):.4f}")
+        print(f"  Shared BC fraction:      {feature_importance.get('shared_frac', 0):.4f}")
+        print(f"  Discordant BC fraction:  {feature_importance.get('discordant_frac', 0):.4f}")
+
         recommended = {
-            'INF_WEIGHT': 1.0,
-            'MAX_UNINF_WEIGHT': 0.5,
-            'EXTRANEOUS_PENALTY': -1.0,
+            'SPECIFIC_WEIGHT':    1.0,
+            'MAX_SHARED_WEIGHT':  0.5,
+            'DISCORDANT_PENALTY': -1.0,
             'CONFIDENCE': 'low',
             'NOTE': 'Random Forest does not provide direct weight translations. Use logistic regression for interpretable weights.'
         }
@@ -494,36 +494,36 @@ def plot_weight_sensitivity(training_data, recommended_weights, output_prefix):
     """
     Plot 1: Weight sensitivity sweep.
 
-    Simulate what happens to accuracy and yield as INF_WEIGHT,
-    MAX_UNINF_WEIGHT, and EXTRANEOUS_PENALTY each vary around their
+    Simulate what happens to accuracy and yield as SPECIFIC_WEIGHT,
+    MAX_SHARED_WEIGHT, and DISCORDANT_PENALTY each vary around their
     recommended values, holding the other two fixed.  This shows the
     shape of the loss landscape and how robust the recommendation is.
 
     We approximate the Bayesian score for each ZMW directly from the
-    stored inf/uninf/extr counts rather than re-running the full scorer,
+    stored specific/shared/discordant counts rather than re-running the full scorer,
     which is fast and sufficient for relative comparison.
     """
     rec = recommended_weights
-    inf_ref   = rec.get('INF_WEIGHT', 1.0)
-    uninf_ref = rec.get('MAX_UNINF_WEIGHT', 0.2)
-    extr_ref  = rec.get('EXTRANEOUS_PENALTY', -0.10)
+    inf_ref   = rec.get('SPECIFIC_WEIGHT', 1.0)
+    uninf_ref = rec.get('MAX_SHARED_WEIGHT', 0.2)
+    extr_ref  = rec.get('DISCORDANT_PENALTY', -0.10)
 
     # Build a minimal per-ZMW table of counts and ground truth
     records = []
     for d in training_data:
         records.append({
-            'n_inf':   d['n_inf'],
-            'n_uninf': d['n_uninf'],
-            'n_extr':  d['n_extr'],
-            'correct': d['label'],
-            'cls':     d['classification'],
+            'n_specific':   d['n_specific'],
+            'n_shared':     d['n_shared'],
+            'n_discordant': d['n_discordant'],
+            'correct':      d['label'],
+            'cls':          d['classification'],
         })
     df = pd.DataFrame(records)
     n_total = len(df)
 
     def score_and_eval(inf_w, uninf_w, extr_w):
         """Return (accuracy_hc, pct_kept_hc) at current HC threshold using given weights."""
-        raw = df['n_inf'] * inf_w + df['n_uninf'] * uninf_w + df['n_extr'] * extr_w
+        raw = df['n_specific'] * inf_w + df['n_shared'] * uninf_w + df['n_discordant'] * extr_w
         # Approx posterior: softmax with 1 competitor at score=0 (worst case)
         # posterior ≈ exp(raw) / (exp(raw) + exp(0))  → sigmoid
         posterior = 1 / (1 + np.exp(-raw))
@@ -535,9 +535,9 @@ def plot_weight_sensitivity(training_data, recommended_weights, output_prefix):
 
     # Sweep ranges: ±50% around recommended, 30 steps each
     sweeps = {
-        'INF_WEIGHT':          np.linspace(max(0.1, inf_ref * 0.5),   inf_ref * 1.5,   30),
-        'MAX_UNINF_WEIGHT':    np.linspace(max(0.01, uninf_ref * 0.5), uninf_ref * 1.5, 30),
-        'EXTRANEOUS_PENALTY':  np.linspace(extr_ref * 1.5,  min(-0.01, extr_ref * 0.5), 30),
+        'SPECIFIC_WEIGHT':    np.linspace(max(0.1, inf_ref * 0.5),   inf_ref * 1.5,   30),
+        'MAX_SHARED_WEIGHT':  np.linspace(max(0.01, uninf_ref * 0.5), uninf_ref * 1.5, 30),
+        'DISCORDANT_PENALTY': np.linspace(extr_ref * 1.5,  min(-0.01, extr_ref * 0.5), 30),
     }
 
     fig, axes = plt.subplots(2, 3, figsize=(16, 9))
@@ -546,18 +546,18 @@ def plot_weight_sensitivity(training_data, recommended_weights, output_prefix):
                  fontsize=12, fontweight='bold')
 
     param_labels = {
-        'INF_WEIGHT':         ('INF_WEIGHT', inf_ref,   'steelblue'),
-        'MAX_UNINF_WEIGHT':   ('MAX_UNINF_WEIGHT', uninf_ref, 'darkorange'),
-        'EXTRANEOUS_PENALTY': ('EXTRANEOUS_PENALTY', extr_ref, 'firebrick'),
+        'SPECIFIC_WEIGHT':    ('SPECIFIC_WEIGHT',    inf_ref,   'steelblue'),
+        'MAX_SHARED_WEIGHT':  ('MAX_SHARED_WEIGHT',  uninf_ref, 'darkorange'),
+        'DISCORDANT_PENALTY': ('DISCORDANT_PENALTY', extr_ref,  'firebrick'),
     }
 
     for col, (param, (label, ref_val, color)) in enumerate(param_labels.items()):
         vals = sweeps[param]
         accs, yields = [], []
         for v in vals:
-            iw = v        if param == 'INF_WEIGHT'         else inf_ref
-            uw = v        if param == 'MAX_UNINF_WEIGHT'   else uninf_ref
-            ew = v        if param == 'EXTRANEOUS_PENALTY' else extr_ref
+            iw = v        if param == 'SPECIFIC_WEIGHT'    else inf_ref
+            uw = v        if param == 'MAX_SHARED_WEIGHT'  else uninf_ref
+            ew = v        if param == 'DISCORDANT_PENALTY' else extr_ref
             acc, yld = score_and_eval(iw, uw, ew)
             accs.append(acc)
             yields.append(yld)
@@ -598,9 +598,9 @@ def plot_error_anatomy(training_data, output_prefix):
 
     For each source pool, show a stacked bar of HIGH_CONF errors broken
     down by likely cause:
-      - Low informative count  (n_inf < 2)
-      - High extraneous count  (n_extr > n_inf)
-      - Ambiguous (uninf dominates: n_uninf > n_inf and n_extr <= n_inf)
+      - Low specific count     (n_specific < 2)
+      - High discordant count  (n_discordant > n_specific)
+      - Ambiguous (shared dominates: n_shared > n_specific and n_discordant <= n_specific)
       - Other / unexplained
 
     Correct HIGH_CONF calls shown as a separate bar for reference scale.
@@ -610,16 +610,16 @@ def plot_error_anatomy(training_data, output_prefix):
     for d in training_data:
         if d['classification'] != 'HIGH_CONF':
             continue
-        n_inf, n_uninf, n_extr = d['n_inf'], d['n_uninf'], d['n_extr']
+        n_specific, n_shared, n_discordant = d['n_specific'], d['n_shared'], d['n_discordant']
         correct = bool(d['label'])
         if correct:
             cause = 'correct'
-        elif n_inf < 2:
-            cause = 'low_inf'
-        elif n_extr > n_inf:
-            cause = 'extr_dominated'
-        elif n_uninf > n_inf:
-            cause = 'uninf_dominated'
+        elif n_specific < 2:
+            cause = 'low_specific'
+        elif n_discordant > n_specific:
+            cause = 'discordant_dominated'
+        elif n_shared > n_specific:
+            cause = 'shared_dominated'
         else:
             cause = 'other'
         records.append({'pool': d['pool'], 'cause': cause})
@@ -630,20 +630,20 @@ def plot_error_anatomy(training_data, output_prefix):
 
     df = pd.DataFrame(records)
     pools = sorted(df['pool'].unique())
-    causes = ['correct', 'low_inf', 'extr_dominated', 'uninf_dominated', 'other']
+    causes = ['correct', 'low_specific', 'discordant_dominated', 'shared_dominated', 'other']
     cause_colors = {
-        'correct':        'steelblue',
-        'low_inf':        '#F4A261',
-        'extr_dominated': '#E63946',
-        'uninf_dominated':'#9B5DE5',
-        'other':          '#AAAAAA',
+        'correct':              'steelblue',
+        'low_specific':         '#F4A261',
+        'discordant_dominated': '#E63946',
+        'shared_dominated':     '#9B5DE5',
+        'other':                '#AAAAAA',
     }
     cause_labels = {
-        'correct':        'Correct',
-        'low_inf':        'Error: low informative count (n_inf < 2)',
-        'extr_dominated': 'Error: extraneous dominant (n_extr > n_inf)',
-        'uninf_dominated':'Error: uninformative dominant (n_uninf > n_inf)',
-        'other':          'Error: other',
+        'correct':              'Correct',
+        'low_specific':         'Error: low specific count (n_specific < 2)',
+        'discordant_dominated': 'Error: discordant dominant (n_discordant > n_specific)',
+        'shared_dominated':     'Error: shared dominant (n_shared > n_specific)',
+        'other':                'Error: other',
     }
 
     counts = df.groupby(['pool', 'cause']).size().unstack(fill_value=0)
@@ -708,18 +708,18 @@ def plot_error_anatomy(training_data, output_prefix):
     print(f"  Saved: {out_path}")
 
 
-def plot_inf_uninf_scatter(training_data, output_prefix):
+def plot_specific_shared_scatter(training_data, output_prefix):
     """
-    Plot 3: Informative vs uninformative barcode count scatter.
+    Plot 3: Specific vs shared barcode count scatter.
 
-    Each ZMW is a point at (n_uninf, n_inf), coloured by correctness.
-    Incorrect assignments clustering in the high-uninf / low-inf region
-    indicate MAX_UNINF_WEIGHT is too permissive.
+    Each ZMW is a point at (n_shared, n_specific), coloured by correctness.
+    Incorrect assignments clustering in the high-shared / low-specific region
+    indicate MAX_SHARED_WEIGHT is too permissive.
 
     Separate panels for HIGH_CONF and LOW_CONF.
     """
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    fig.suptitle('Informative vs Uninformative Barcode Counts by Correctness',
+    fig.suptitle('Specific vs Shared Barcode Counts by Correctness',
                  fontsize=12, fontweight='bold')
 
     for ax, tier in zip(axes, ['HIGH_CONF', 'LOW_CONF']):
@@ -728,39 +728,39 @@ def plot_inf_uninf_scatter(training_data, output_prefix):
             ax.set_visible(False)
             continue
 
-        n_uninf = np.array([d['n_uninf'] for d in sub])
-        n_inf   = np.array([d['n_inf']   for d in sub])
-        correct = np.array([d['label']   for d in sub], dtype=bool)
+        n_shared   = np.array([d['n_shared']   for d in sub])
+        n_specific = np.array([d['n_specific'] for d in sub])
+        correct    = np.array([d['label']      for d in sub], dtype=bool)
 
         # Jitter slightly so overlapping points are visible
         jitter = 0.15
         rng = np.random.default_rng(42)
-        jx = rng.uniform(-jitter, jitter, size=len(n_uninf))
-        jy = rng.uniform(-jitter, jitter, size=len(n_inf))
+        jx = rng.uniform(-jitter, jitter, size=len(n_shared))
+        jy = rng.uniform(-jitter, jitter, size=len(n_specific))
 
-        ax.scatter(n_uninf[correct]  + jx[correct],
-                   n_inf[correct]    + jy[correct],
+        ax.scatter(n_shared[correct]    + jx[correct],
+                   n_specific[correct]  + jy[correct],
                    c='steelblue', alpha=0.25, s=8, label='Correct', rasterized=True)
-        ax.scatter(n_uninf[~correct] + jx[~correct],
-                   n_inf[~correct]   + jy[~correct],
+        ax.scatter(n_shared[~correct]   + jx[~correct],
+                   n_specific[~correct] + jy[~correct],
                    c='tomato', alpha=0.6, s=12, label='Incorrect', rasterized=True)
 
-        # Reference lines: y = x (inf == uninf) and y = 2x
-        max_val = max(n_uninf.max(), n_inf.max()) + 1
+        # Reference lines: y = x (specific == shared) and y = 2x
+        max_val = max(n_shared.max(), n_specific.max()) + 1
         xs = np.array([0, max_val])
-        ax.plot(xs, xs,       'k--', linewidth=0.8, alpha=0.5, label='inf = uninf')
-        ax.plot(xs, xs * 2,   'k:',  linewidth=0.8, alpha=0.4, label='inf = 2× uninf')
+        ax.plot(xs, xs,     'k--', linewidth=0.8, alpha=0.5, label='specific = shared')
+        ax.plot(xs, xs * 2, 'k:',  linewidth=0.8, alpha=0.4, label='specific = 2× shared')
 
         n_err = int((~correct).sum())
         n_tot = len(sub)
-        ax.set_xlabel('Uninformative Barcode Count', fontsize=9)
-        ax.set_ylabel('Informative Barcode Count', fontsize=9)
+        ax.set_xlabel('Shared Barcode Count', fontsize=9)
+        ax.set_ylabel('Specific Barcode Count', fontsize=9)
         ax.set_title(f'{tier}  (n={n_tot:,}, {n_err} errors)', fontsize=10)
         ax.legend(fontsize=8, markerscale=2)
         ax.grid(True, alpha=0.2)
 
     plt.tight_layout()
-    out_path = f'{output_prefix}_inf_uninf_scatter.png'
+    out_path = f'{output_prefix}_specific_shared_scatter.png'
     plt.savefig(out_path, dpi=200, bbox_inches='tight')
     plt.close()
     print(f"  Saved: {out_path}")
@@ -965,7 +965,7 @@ def main():
     plot_model_diagnostics(model, feature_names, training_data, args.model, plot_prefix)
     plot_weight_sensitivity(training_data, recommended_weights, plot_prefix)
     plot_error_anatomy(training_data, plot_prefix)
-    plot_inf_uninf_scatter(training_data, plot_prefix)
+    plot_specific_shared_scatter(training_data, plot_prefix)
     plot_per_pool_accuracy(training_data, plot_prefix)
     plot_score_separation(training_data, plot_prefix)
 
@@ -984,10 +984,10 @@ def main():
     
     print(f"\nResults saved to {args.output}")
     print(f"\nTo use these weights, update your assign_kinnex script:")
-    print(f"  INF_WEIGHT = {recommended_weights['INF_WEIGHT']}")
-    print(f"  MAX_UNINF_WEIGHT = {recommended_weights['MAX_UNINF_WEIGHT']:.3f}")
+    print(f"  SPECIFIC_WEIGHT    = {recommended_weights['SPECIFIC_WEIGHT']}")
+    print(f"  MAX_SHARED_WEIGHT  = {recommended_weights['MAX_SHARED_WEIGHT']:.3f}")
     print(f"  # And change line with 'score -= 1.0' to:")
-    print(f"  score += {recommended_weights['EXTRANEOUS_PENALTY']:.3f}  # (was -1.0)")
+    print(f"  score += {recommended_weights['DISCORDANT_PENALTY']:.3f}  # (was -1.0)")
 
 
 if __name__ == '__main__':

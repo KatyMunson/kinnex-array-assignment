@@ -8,7 +8,7 @@ yield subject to a target accuracy. Produces plots and a JSON recommendations
 file.
 
 See optimize_thresholds_v2.py for multi-dimensional search over posterior,
-minimum observations, and minimum informative barcode counts.
+minimum observations, and minimum specific barcode counts.
 
 Usage:
     python optimize_thresholds.py \\
