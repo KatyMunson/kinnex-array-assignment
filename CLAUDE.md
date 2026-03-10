@@ -110,7 +110,7 @@ MIN_SPECIFIC_LOW_CONF  = 0
 The assignment TSV has a comment header block (`#`-prefixed) with provenance (git hash, run date, parameters), followed by tab-separated data:
 ```
 ZMW | Assigned_Array | Classification | Top_Posterior | N_Observations |
-Informative_Barcodes | Uninformative_Barcodes | Extraneous_Barcodes | Array_Kinnex | All_Barcodes
+Specific_Barcodes | Shared_Barcodes | Discordant_Barcodes | Array_Kinnex | All_Barcodes
 ```
 
 Use `utils.load_assignments()` or `utils.load_assignments_df()` to load — these skip the comment header automatically.
@@ -220,11 +220,8 @@ All scripts that consume manifests, arrays files, or assignments should import f
 
 ### Barcode Terminology
 
-The codebase uses two naming conventions (a rename is planned):
-- Current code: `informative` / `uninformative` barcodes
-- Intended new names: `specific` / `shared` barcodes
-
-When reading or modifying code, be aware both terms refer to the same concepts.
+The codebase uses `specific` / `shared` / `discordant` barcodes consistently.
+(An earlier version used `informative` / `uninformative` / `extraneous` — these names no longer appear in the code.)
 
 ---
 
@@ -234,10 +231,10 @@ From `REFACTOR_NOTES.md`:
 
 1. **Sankey plot broken** — `generate_sankey.py` has a data format mismatch; do not rely on it
 2. **Rule granularity** — `merge_and_finalize` in `Snakefile_subsample` bundles 3 separate outputs into one rule; should be split
-3. **Terminology rename** — `informative`→`specific`, `uninformative`→`shared` throughout scripts
-4. **MIN_INF gate** — Add minimum specific-barcode observation requirement to assignment classifier
+3. ~~**Terminology rename**~~ — completed: `informative`→`specific`, `uninformative`→`shared`, `extraneous`→`discordant`
+4. ~~**MIN_SPECIFIC gate**~~ — completed: `MIN_SPECIFIC_HIGH_CONF=1` / `MIN_SPECIFIC_LOW_CONF=0` added to `assign_kinnex.py`
 5. **Comment pass** — Many functions and non-obvious logic blocks need inline documentation
-6. **Utils extension** — `test_script/` and `train_script/` should import from `utils.py` instead of duplicating logic
+6. ~~**Utils extension**~~ — completed: `test_script/` and `train_script/` scripts now import from `utils.py`
 7. **commit_configs.sh undocumented** — Should be added to README
 
 When working on these, keep changes focused and create separate commits per item.

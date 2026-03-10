@@ -485,7 +485,7 @@ python train_script/optimize_thresholds.py \
 ### `optimize_thresholds_v2.py`
 
 Multi-dimensional grid search over posterior threshold, minimum observations,
-and minimum informative barcodes. Computes the Pareto frontier.
+and minimum specific barcodes. Computes the Pareto frontier.
 
 ```bash
 python train_script/optimize_thresholds_v2.py \

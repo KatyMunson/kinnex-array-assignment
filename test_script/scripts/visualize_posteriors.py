@@ -120,7 +120,7 @@ def plot_posterior_distributions(df, plot_path):
     ax3.set_title('LOW_CONF Only (excluding 0)')
     ax3.legend()
     
-    # 4. Posterior vs Informative Barcodes (correct assignments)
+    # 4. Posterior vs Specific Barcodes (correct assignments)
     ax4 = plt.subplot(2, 3, 4)
     correct_df = df[df['Correct'] == True]
     scatter = ax4.scatter(correct_df['Specific_Barcodes'], correct_df['Top_Posterior'],
@@ -131,7 +131,7 @@ def plot_posterior_distributions(df, plot_path):
     ax4.axhline(y=0.89, color='blue', linestyle='--', alpha=0.5)
     ax4.axhline(y=0.93, color='purple', linestyle='--', alpha=0.5)
     
-    # 5. Posterior vs Informative Barcodes (incorrect assignments)
+    # 5. Posterior vs Specific Barcodes (incorrect assignments)
     ax5 = plt.subplot(2, 3, 5)
     incorrect_df = df[df['Correct'] == False]
     scatter = ax5.scatter(incorrect_df['Specific_Barcodes'], incorrect_df['Top_Posterior'],
