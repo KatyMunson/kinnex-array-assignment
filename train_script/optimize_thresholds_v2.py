@@ -116,7 +116,7 @@ def load_data(assignment_files, lookup_files):
     print(f"  n_obs range:      {df['n_obs'].min()} – {df['n_obs'].max()}")
     print(f"  n_specific range: {df['n_specific'].min()} – {df['n_specific'].max()}")
 
-    return df
+    return df, seen_params
 
 
 # =======================
@@ -702,11 +702,11 @@ def main():
     parser.add_argument('--low-conf-target-accuracy', type=float, default=0.95,
                         help='Target accuracy for LOW_CONF recommendation')
 
-    # Current thresholds (for comparison)
-    parser.add_argument('--current-high-conf',  type=float, default=0.840)
-    parser.add_argument('--current-low-conf',   type=float, default=0.500)
-    parser.add_argument('--current-min-obs',    type=int,   default=3)
-    parser.add_argument('--current-min-specific', type=int,  default=0)
+    # Current thresholds (for comparison; default: read from assignment file header)
+    parser.add_argument('--current-high-conf',    type=float, default=None)
+    parser.add_argument('--current-low-conf',     type=float, default=None)
+    parser.add_argument('--current-min-obs',      type=int,   default=None)
+    parser.add_argument('--current-min-specific', type=int,   default=None)
 
     args = parser.parse_args()
 
@@ -734,7 +734,17 @@ def main():
     print(f"Lookup files:     {len(lookup_files)}")
 
     # ---- Load ----
-    df = load_data(assignment_files, lookup_files)
+    df, seen_params = load_data(assignment_files, lookup_files)
+
+    # Seed --current-* from assignment file header when not explicitly provided
+    if args.current_high_conf is None:
+        args.current_high_conf = float(seen_params.get('POSTERIOR_HIGH_CONF', 0.840))
+    if args.current_low_conf is None:
+        args.current_low_conf  = float(seen_params.get('POSTERIOR_LOW_CONF',  0.500))
+    if args.current_min_obs is None:
+        args.current_min_obs   = int(float(seen_params.get('MIN_OBS_HIGH_CONF', 3)))
+    if args.current_min_specific is None:
+        args.current_min_specific = int(float(seen_params.get('MIN_SPECIFIC_HIGH_CONF', 0)))
 
     # ---- Build sweep axes ----
     posterior_thresholds = np.arange(

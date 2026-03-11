@@ -85,8 +85,8 @@ def load_data(assignment_files, lookup_files):
     print(f"\nTotal assignments: {len(df):,}")
     print(f"  Correct: {df['correct'].sum():,} ({df['correct'].mean()*100:.2f}%)")
     print(f"  Incorrect: {(~df['correct']).sum():,} ({(~df['correct']).mean()*100:.2f}%)")
-    
-    return df
+
+    return df, seen_params
 
 
 def analyze_posterior_distribution(df):
@@ -310,10 +310,10 @@ def main():
     parser.add_argument('--assignments', nargs='+', required=True, help='Assignment result files')
     parser.add_argument('--lookups', nargs='+', required=True, help='Ground truth lookup files')
     parser.add_argument('--output', default='threshold_recommendations.json', help='Output file')
-    parser.add_argument('--current-high-conf', type=float, default=0.840,
-                        help='Current HIGH_CONF threshold (default: 0.840)')
-    parser.add_argument('--current-low-conf', type=float, default=0.50,
-                        help='Current LOW_CONF threshold (default: 0.50)')
+    parser.add_argument('--current-high-conf', type=float, default=None,
+                        help='Current HIGH_CONF threshold for comparison (default: read from assignment file header)')
+    parser.add_argument('--current-low-conf', type=float, default=None,
+                        help='Current LOW_CONF threshold for comparison (default: read from assignment file header)')
     parser.add_argument('--target-accuracy', type=float, default=0.9999,
                         help='Target accuracy for HIGH_CONF (default: 0.9999 = 99.99%%)')
     
@@ -336,8 +336,14 @@ def main():
     print(f"Found {len(lookup_files)} lookup files")
     
     # Load data
-    df = load_data(assignment_files, lookup_files)
-    
+    df, seen_params = load_data(assignment_files, lookup_files)
+
+    # Seed --current-* from assignment file header when not explicitly provided
+    if args.current_high_conf is None:
+        args.current_high_conf = float(seen_params.get('POSTERIOR_HIGH_CONF', 0.840))
+    if args.current_low_conf is None:
+        args.current_low_conf = float(seen_params.get('POSTERIOR_LOW_CONF', 0.50))
+
     # Analyze distribution
     analyze_posterior_distribution(df)
     
