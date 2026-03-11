@@ -295,9 +295,9 @@ checkpoint lima_isoseq:
         mkdir -p {output}
         lima {input.bam} {input.primers} {output}/{wildcards.sample}.fl.bam \
             --isoseq \
-            --min-score 80 \
-            --min-score-lead 10 \
-            --min-ref-span 0.75 \
+            --min-score {config[lima_pass1][min_score]} \
+            --min-score-lead {config[lima_pass1][min_score_lead]} \
+            --min-ref-span {config[lima_pass1][min_ref_span]} \
             --no-output > {log} 2>&1
         """
 

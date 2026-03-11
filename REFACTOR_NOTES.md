@@ -42,7 +42,7 @@ be in separate rules.
 
 ---
 
-## Barcode terminology rename
+## ~~Barcode terminology rename~~ — COMPLETED (Mar 2026)
 
 **Issue:** Column headers and constants still use "informative" / "uninformative"
 terminology, which is a misnomer — shared barcodes still contribute signal.
@@ -58,9 +58,12 @@ terminology, which is a misnomer — shared barcodes still contribute signal.
 Snakefile_qc (column references), optimize_barcode_weights.py,
 optimize_thresholds.py, optimize_thresholds_v2.py, README.md.
 
+**Resolution:** All terminology updated across the codebase. The old names
+(`informative`, `uninformative`, `extraneous`) no longer appear in any file.
+
 ---
 
-## MIN_INF gate (minimum informative barcodes)
+## ~~MIN_INF gate (minimum informative barcodes)~~ — COMPLETED (Mar 2026)
 
 **Issue:** The classifier gates on MIN_OBS (total segments) but not on a
 minimum count of specific/informative barcodes. A ZMW with many shared-only
@@ -69,6 +72,52 @@ observations could pass MIN_OBS but have low discriminating power.
 **Desired outcome:** Add a MIN_INF_HIGH_CONF / MIN_INF_LOW_CONF parameter
 to assign_kinnex.py, and use optimize_thresholds_v2.py to find the optimal
 value empirically. See earlier design discussion for context.
+
+**Resolution:** Added `MIN_SPECIFIC_HIGH_CONF` and `MIN_SPECIFIC_LOW_CONF`
+constants to `assign_kinnex.py` (defaults: 1 and 0 respectively). Both are
+applied in the classification logic and written to the assignment file header
+for provenance. `optimize_thresholds_v2.py` was updated to grid-search over
+these parameters.
+
+---
+
+## ~~Bug fix pass~~ — COMPLETED (Mar 2026)
+
+**Issue:** Code review identified 10 bugs: 3 crash-on-valid-input, 5 silently
+wrong output, 2 documentation mismatches. See CHANGELOG.md for the full list.
+
+**Resolution:** All 10 fixed. Key fixes: ZeroDivisionError in
+split_skera_by_library.py; or-None dropping valid zero FLNC counts in
+aggregate_pipeline_qc.py; stale hardcoded baseline weights in training scripts
+(now read from assignment file header); split() vs split("\t") inconsistency
+between assign_kinnex.py and utils.py.
+
+---
+
+## ~~Lima pass 1 flags hardcoded in Snakefile~~ — COMPLETED (Mar 2026)
+
+**Issue:** min_score, min_score_lead, min_ref_span were hardcoded in the
+lima_isoseq rule shell block. Users troubleshooting low pass rates had to
+edit the Snakefile directly. A dead lima: peek_guess: true key in config.yaml
+gave the false impression that Lima options were already configurable.
+
+**Resolution:** All three params moved to a lima_pass1: section in config.yaml
+with notes on PacBio defaults and when to adjust them. The dead config key
+was removed. Snakefile rule now reads from config[lima_pass1].
+
+---
+
+## Sentinel BAMs missing for zero-assignment libraries
+
+**Issue:** split_skera_by_library.py creates sentinel (header-only) BAMs for
+zero-read confidence tiers to prevent Snakemake MissingInputException. However,
+it only creates them for libraries that appear in the assignment file. A library
+present in the arrays file that received zero ZMW assignments will have no
+sentinel BAM, which can cause a downstream MissingInputException.
+
+**To do:** Pass the arrays file path as an additional input to the split script
+so it can create sentinel BAMs for all expected libraries, not just those with
+at least one assignment.
 
 ---
 
@@ -116,7 +165,7 @@ Utilities" or "Git Workflow" heading explaining:
 
 ---
 
-## Extend utils.py to test_script and train_script
+## ~~Extend utils.py to test_script and train_script~~ — COMPLETED (Mar 2026)
 
 **Context:** utils.py was created in prod_script/scripts/ (Mar 2026) and
 provides `load_assignments()`, `load_assignments_df()`, and
@@ -138,3 +187,15 @@ path in each script) and update all five files to use
 warn when assignment files being used for training were generated with
 different scoring parameters than each other, or than the current constants
 in assign_kinnex.py.
+
+**Resolution:** All five files now import utils.py via `sys.path.insert` to
+`prod_script/scripts/` and use `utils.load_assignments_df()` and
+`utils.parse_assignment_header()` for loading assignment data and headers.
+
+**Follow-up fix (Mar 2026):** `visualize_posteriors.py` was additionally
+corrected to use the header-parsed thresholds for all plot annotations.
+Previously, threshold lines in the posterior distribution plots were hardcoded
+to exploratory values (0.89, 0.93, 0.6) rather than the actual
+`POSTERIOR_HIGH_CONF` / `POSTERIOR_LOW_CONF` / `MIN_OBS_HIGH_CONF` values
+from the assignment file header. The plot now reads and displays the real
+thresholds used during classification.

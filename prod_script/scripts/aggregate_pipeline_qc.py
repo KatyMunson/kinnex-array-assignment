@@ -445,7 +445,7 @@ for s in samples:
     rf_lc     = df_refine.loc[(df_refine["sample"] == s) & (df_refine["confidence"] == "lowconf")]  if len(df_refine) else pd.DataFrame()
     flnc_hc   = int(rf_hc["total_flnc"].sum()) if len(rf_hc) else None
     flnc_lc   = int(rf_lc["total_flnc"].sum()) if len(rf_lc) else None
-    flnc_total = (flnc_hc or 0) + (flnc_lc or 0) or None
+    flnc_total = (flnc_hc or 0) + (flnc_lc or 0) if (flnc_hc is not None or flnc_lc is not None) else None
 
     summary_rows.append({
         "sample":                s,

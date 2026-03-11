@@ -8,17 +8,20 @@ confidence tier (HIGH_CONF / LOW_CONF). Requires ground truth lookup from
 Snakefile_subsample to label correctness.
 
 Called by Snakefile_qc (rule visualize_posteriors), or run standalone:
-    python visualize_posteriors.py <assignments.txt> <lookup.txt> <output_prefix>
+    python visualize_posteriors.py <assignments.txt> <lookup.txt> <plot.png> <threshold.csv>
 
 Author:  KM
 Created: 2026-02
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../prod_script/scripts'))
+import utils
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import sys
-import os
 from pathlib import Path
 import numpy as np
 
@@ -26,7 +29,7 @@ def load_assignment_data(assignment_file, lookup_file):
     """Load and merge assignment results with ground truth."""
     # Load data
     truth_df = pd.read_csv(lookup_file, sep="\t", dtype=str)
-    assign_df = pd.read_csv(assignment_file, sep="\t", dtype=str, comment='#')
+    assign_df = utils.load_assignments_df(assignment_file)
     
     # Strip /ccs suffix from truth
     truth_df['Read'] = truth_df['Read'].str.replace('/ccs', '', regex=False)
@@ -37,8 +40,8 @@ def load_assignment_data(assignment_file, lookup_file):
     
     # Convert numeric columns
     merged['Top_Posterior'] = pd.to_numeric(merged['Top_Posterior'])
-    merged['Informative_Barcodes'] = pd.to_numeric(merged['Informative_Barcodes'])
-    merged['Uninformative_Barcodes'] = pd.to_numeric(merged['Uninformative_Barcodes'])
+    merged['Specific_Barcodes'] = pd.to_numeric(merged['Specific_Barcodes'])
+    merged['Shared_Barcodes']   = pd.to_numeric(merged['Shared_Barcodes'])
     
     # Calculate segments per ZMW from All_Barcodes column
     merged['Segments_per_ZMW'] = merged['All_Barcodes'].str.count(',') + 1
@@ -46,50 +49,61 @@ def load_assignment_data(assignment_file, lookup_file):
     # Add correctness flag
     merged['Correct'] = merged['Assigned_Array'] == merged['KinnexLib']
     
-    # Add total barcodes and informative fraction
-    merged['Total_Barcodes'] = merged['Informative_Barcodes'] + merged['Uninformative_Barcodes']
-    merged['Informative_Fraction'] = merged['Informative_Barcodes'] / merged['Total_Barcodes']
+    # Add total barcodes and specific fraction
+    merged['Total_Barcodes']    = merged['Specific_Barcodes'] + merged['Shared_Barcodes']
+    merged['Specific_Fraction'] = merged['Specific_Barcodes'] / merged['Total_Barcodes'].replace(0, np.nan)
     
     return merged
 
-def plot_posterior_distributions(df, plot_path):
-    """Create comprehensive posterior distribution plots."""
-    
+def plot_posterior_distributions(df, plot_path, thresholds):
+    """Create comprehensive posterior distribution plots.
+
+    Parameters
+    ----------
+    thresholds : dict
+        Parsed header from utils.parse_assignment_header().  Keys used:
+        POSTERIOR_HIGH_CONF, POSTERIOR_LOW_CONF, MIN_OBS_HIGH_CONF.
+        Falls back to the assign_kinnex.py defaults if a key is absent.
+    """
+    p_hc     = float(thresholds.get('POSTERIOR_HIGH_CONF', 0.840))
+    p_lc     = float(thresholds.get('POSTERIOR_LOW_CONF',  0.50))
+    min_obs  = int(float(thresholds.get('MIN_OBS_HIGH_CONF', 3)))
+
     # Set style
     sns.set_style("whitegrid")
-    
+
     # Create figure with multiple subplots
     fig = plt.figure(figsize=(16, 12))
-    
+
     # 1. Overall posterior distribution by correctness
     ax1 = plt.subplot(2, 3, 1)
-    
+
     # Filter out posterior = 0 for better visualization
     df_filtered = df[df['Top_Posterior'] > 0].copy()
-    
+
     for correct in [True, False]:
         data = df_filtered[df_filtered['Correct'] == correct]['Top_Posterior']
         label = 'Correct' if correct else 'Incorrect'
         color = 'green' if correct else 'red'
-        # Use bins that focus on 0.5-1.0 where most data is
         ax1.hist(data, bins=50, range=(0.5, 1.0), alpha=0.6, label=label, color=color, density=True)
     ax1.set_xlim(0.5, 1.0)
     ax1.set_xlabel('Top Posterior')
     ax1.set_ylabel('Density')
     ax1.set_title('Overall Posterior Distribution (excluding 0)')
     ax1.legend()
-    ax1.axvline(x=0.89, color='blue', linestyle='--', alpha=0.5, linewidth=1)
-    ax1.axvline(x=0.93, color='purple', linestyle='--', alpha=0.5, linewidth=1)
-    ax1.axvline(x=0.6, color='green', linestyle='--', alpha=0.5, linewidth=1)
-    ax1.text(0.89, ax1.get_ylim()[1]*0.95, 'std', fontsize=8, ha='center')
-    ax1.text(0.93, ax1.get_ylim()[1]*0.85, 'relax', fontsize=8, ha='center')
-    ax1.text(0.6, ax1.get_ylim()[1]*0.75, 'lowconf', fontsize=8, ha='center')
-    
+    ax1.axvline(x=p_hc, color='blue',  linestyle='--', alpha=0.7, linewidth=1,
+                label=f'HIGH_CONF={p_hc}')
+    ax1.axvline(x=p_lc, color='orange', linestyle='--', alpha=0.7, linewidth=1,
+                label=f'LOW_CONF={p_lc}')
+    ymax = ax1.get_ylim()[1]
+    ax1.text(p_hc, ymax * 0.95, f'HC\n{p_hc}',  fontsize=7, ha='center', color='blue')
+    ax1.text(p_lc, ymax * 0.95, f'LC\n{p_lc}',  fontsize=7, ha='center', color='orange')
+
     # 2. HIGH_CONF only
     ax2 = plt.subplot(2, 3, 2)
     high_conf = df[df['Classification'] == 'HIGH_CONF']
     high_conf_filtered = high_conf[high_conf['Top_Posterior'] > 0].copy()
-    
+
     for correct in [True, False]:
         data = high_conf_filtered[high_conf_filtered['Correct'] == correct]['Top_Posterior']
         label = f'Correct (n={len(data)})'  if correct else f'Incorrect (n={len(data)})'
@@ -99,13 +113,15 @@ def plot_posterior_distributions(df, plot_path):
     ax2.set_xlabel('Top Posterior')
     ax2.set_ylabel('Density')
     ax2.set_title('HIGH_CONF Only (excluding 0)')
+    ax2.axvline(x=p_hc, color='blue', linestyle='--', alpha=0.7, linewidth=1,
+                label=f'HC threshold={p_hc}')
     ax2.legend()
-    
+
     # 3. LOW_CONF only
     ax3 = plt.subplot(2, 3, 3)
     low_conf = df[df['Classification'] == 'LOW_CONF']
     low_conf_filtered = low_conf[low_conf['Top_Posterior'] > 0].copy()
-    
+
     for correct in [True, False]:
         data = low_conf_filtered[low_conf_filtered['Correct'] == correct]['Top_Posterior']
         label = f'Correct (n={len(data)})' if correct else f'Incorrect (n={len(data)})'
@@ -115,30 +131,34 @@ def plot_posterior_distributions(df, plot_path):
     ax3.set_xlabel('Top Posterior')
     ax3.set_ylabel('Density')
     ax3.set_title('LOW_CONF Only (excluding 0)')
+    ax3.axvline(x=p_lc, color='orange', linestyle='--', alpha=0.7, linewidth=1,
+                label=f'LC threshold={p_lc}')
     ax3.legend()
-    
-    # 4. Posterior vs Informative Barcodes (correct assignments)
+
+    # 4. Posterior vs Specific Barcodes (correct assignments)
     ax4 = plt.subplot(2, 3, 4)
     correct_df = df[df['Correct'] == True]
-    scatter = ax4.scatter(correct_df['Informative_Barcodes'], correct_df['Top_Posterior'], 
-                         alpha=0.3, s=1, c='green')
-    ax4.set_xlabel('Informative Barcodes')
+    ax4.scatter(correct_df['Specific_Barcodes'], correct_df['Top_Posterior'],
+                alpha=0.3, s=1, c='green')
+    ax4.set_xlabel('Specific Barcodes')
     ax4.set_ylabel('Top Posterior')
     ax4.set_title('Correct Assignments')
-    ax4.axhline(y=0.89, color='blue', linestyle='--', alpha=0.5)
-    ax4.axhline(y=0.93, color='purple', linestyle='--', alpha=0.5)
-    
-    # 5. Posterior vs Informative Barcodes (incorrect assignments)
+    ax4.axhline(y=p_hc, color='blue',   linestyle='--', alpha=0.7, label=f'HC={p_hc}')
+    ax4.axhline(y=p_lc, color='orange', linestyle='--', alpha=0.7, label=f'LC={p_lc}')
+    ax4.legend(fontsize=7)
+
+    # 5. Posterior vs Specific Barcodes (incorrect assignments)
     ax5 = plt.subplot(2, 3, 5)
     incorrect_df = df[df['Correct'] == False]
-    scatter = ax5.scatter(incorrect_df['Informative_Barcodes'], incorrect_df['Top_Posterior'], 
-                         alpha=0.5, s=2, c='red')
-    ax5.set_xlabel('Informative Barcodes')
+    ax5.scatter(incorrect_df['Specific_Barcodes'], incorrect_df['Top_Posterior'],
+                alpha=0.5, s=2, c='red')
+    ax5.set_xlabel('Specific Barcodes')
     ax5.set_ylabel('Top Posterior')
     ax5.set_title(f'Incorrect Assignments (n={len(incorrect_df)})')
-    ax5.axhline(y=0.89, color='blue', linestyle='--', alpha=0.5)
-    ax5.axhline(y=0.93, color='purple', linestyle='--', alpha=0.5)
-    
+    ax5.axhline(y=p_hc, color='blue',   linestyle='--', alpha=0.7, label=f'HC={p_hc}')
+    ax5.axhline(y=p_lc, color='orange', linestyle='--', alpha=0.7, label=f'LC={p_lc}')
+    ax5.legend(fontsize=7)
+
     # 6. Segments per ZMW distribution
     ax6 = plt.subplot(2, 3, 6)
     for correct in [True, False]:
@@ -150,8 +170,9 @@ def plot_posterior_distributions(df, plot_path):
     ax6.set_ylabel('Density')
     ax6.set_title('Segments per ZMW Distribution')
     ax6.set_xticks(range(1, 9))
+    ax6.axvline(x=min_obs, color='blue', linestyle='--', alpha=0.7,
+                label=f'MIN_OBS_HC={min_obs}')
     ax6.legend()
-    ax6.axvline(x=3, color='blue', linestyle='--', alpha=0.5, label='3 segments')
     
     plt.tight_layout()
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
@@ -165,31 +186,31 @@ def generate_threshold_table(df):
     high_conf_df = df[df['Classification'] == 'HIGH_CONF'].copy()
     
     thresholds = [
-        {'name': 'Current HIGH_CONF', 'posterior': 0.0, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Posterior ≥ 0.90', 'posterior': 0.90, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Posterior ≥ 0.95', 'posterior': 0.95, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Posterior ≥ 0.99', 'posterior': 0.99, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'InfBC ≥ 2', 'posterior': 0.0, 'min_inf_bc': 2, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'InfBC ≥ 3', 'posterior': 0.0, 'min_inf_bc': 3, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Segments ≥ 3', 'posterior': 0.0, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 3},
-        {'name': 'Segments ≥ 4', 'posterior': 0.0, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 4},
-        {'name': 'InfFrac ≥ 0.5', 'posterior': 0.0, 'min_inf_bc': 0, 'inf_frac': 0.5, 'min_segments': 0},
-        {'name': 'Post≥0.95 + InfBC≥3', 'posterior': 0.95, 'min_inf_bc': 3, 'inf_frac': 0.0, 'min_segments': 0},
-        {'name': 'Post≥0.95 + Seg≥3', 'posterior': 0.95, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 3},
-        {'name': 'Post≥0.99 + Seg≥3', 'posterior': 0.99, 'min_inf_bc': 0, 'inf_frac': 0.0, 'min_segments': 3},
-        {'name': 'Post≥0.95 + InfFrac≥0.5', 'posterior': 0.95, 'min_inf_bc': 0, 'inf_frac': 0.5, 'min_segments': 0},
-        {'name': 'Conservative', 'posterior': 0.95, 'min_inf_bc': 3, 'inf_frac': 0.5, 'min_segments': 0},
-        {'name': 'Ultra-Conservative', 'posterior': 0.99, 'min_inf_bc': 3, 'inf_frac': 0.5, 'min_segments': 3},
+        {'name': 'Current HIGH_CONF',       'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Posterior ≥ 0.90',        'posterior': 0.90, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Posterior ≥ 0.95',        'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Posterior ≥ 0.99',        'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'SpecBC ≥ 2',              'posterior': 0.0,  'min_specific_bc': 2, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'SpecBC ≥ 3',              'posterior': 0.0,  'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Segments ≥ 3',            'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+        {'name': 'Segments ≥ 4',            'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 4},
+        {'name': 'SpecFrac ≥ 0.5',          'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.5, 'min_segments': 0},
+        {'name': 'Post≥0.95 + SpecBC≥3',   'posterior': 0.95, 'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
+        {'name': 'Post≥0.95 + Seg≥3',      'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+        {'name': 'Post≥0.99 + Seg≥3',      'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+        {'name': 'Post≥0.95 + SpecFrac≥0.5','posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.5, 'min_segments': 0},
+        {'name': 'Conservative',            'posterior': 0.95, 'min_specific_bc': 3, 'specific_frac': 0.5, 'min_segments': 0},
+        {'name': 'Ultra-Conservative',      'posterior': 0.99, 'min_specific_bc': 3, 'specific_frac': 0.5, 'min_segments': 3},
     ]
     
     results = []
     
     for thresh in thresholds:
         # Apply filters to HIGH_CONF only
-        mask = (high_conf_df['Top_Posterior'] >= thresh['posterior']) & \
-               (high_conf_df['Informative_Barcodes'] >= thresh['min_inf_bc']) & \
-               (high_conf_df['Informative_Fraction'] >= thresh['inf_frac']) & \
-               (high_conf_df['Segments_per_ZMW'] >= thresh['min_segments'])
+        mask = (high_conf_df['Top_Posterior']    >= thresh['posterior']) & \
+               (high_conf_df['Specific_Barcodes'] >= thresh['min_specific_bc']) & \
+               (high_conf_df['Specific_Fraction'] >= thresh['specific_frac']) & \
+               (high_conf_df['Segments_per_ZMW']  >= thresh['min_segments'])
         
         filtered = high_conf_df[mask]
         
@@ -228,7 +249,15 @@ if __name__ == "__main__":
     threshold_path  = sys.argv[4]
 
     print(f"Loading data...")
+    thresholds = utils.parse_assignment_header(assignment_file)
     df = load_assignment_data(assignment_file, lookup_file)
+
+    print(f"\nThresholds from assignment header:")
+    for key in ('POSTERIOR_HIGH_CONF', 'POSTERIOR_LOW_CONF',
+                'MIN_OBS_HIGH_CONF', 'MIN_OBS_LOW_CONF',
+                'MIN_SPECIFIC_HIGH_CONF', 'MIN_SPECIFIC_LOW_CONF'):
+        if key in thresholds:
+            print(f"  {key} = {thresholds[key]}")
 
     print(f"\nDataset summary:")
     print(f"  Total reads: {len(df):,}")
@@ -242,7 +271,7 @@ if __name__ == "__main__":
     print(f"  Overall accuracy: {df['Correct'].sum()/len(df)*100:.2f}%")
 
     print(f"\nGenerating plots...")
-    plot_posterior_distributions(df, plot_path)
+    plot_posterior_distributions(df, plot_path, thresholds)
 
     print(f"\nThreshold analysis (HIGH_CONF only):")
     threshold_table = generate_threshold_table(df)

@@ -461,7 +461,7 @@ subsampling pipeline.
 ### `optimize_barcode_weights.py`
 
 Finds optimal `SPECIFIC_WEIGHT`, `MAX_SHARED_WEIGHT`, and
-`EXTRANEOUS_PENALTY` values for the Bayesian scorer.
+`DISCORDANT_PENALTY` values for the Bayesian scorer.
 
 ```bash
 python train_script/optimize_barcode_weights.py \
@@ -485,7 +485,7 @@ python train_script/optimize_thresholds.py \
 ### `optimize_thresholds_v2.py`
 
 Multi-dimensional grid search over posterior threshold, minimum observations,
-and minimum informative barcodes. Computes the Pareto frontier.
+and minimum specific barcodes. Computes the Pareto frontier.
 
 ```bash
 python train_script/optimize_thresholds_v2.py \
@@ -495,7 +495,7 @@ python train_script/optimize_thresholds_v2.py \
 ```
 
 After running, update `POSTERIOR_HIGH_CONF`, `POSTERIOR_LOW_CONF`,
-`INF_WEIGHT`, `MAX_UNINF_WEIGHT`, and `EXTRANEOUS_PENALTY` in
+`SPECIFIC_WEIGHT`, `MAX_SHARED_WEIGHT`, and `DISCORDANT_PENALTY` in
 `prod_script/scripts/assign_kinnex.py` accordingly.
 
 ---

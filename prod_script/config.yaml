@@ -17,9 +17,15 @@ pipeline_qc_script:     scripts/aggregate_pipeline_qc.py
 sankey_script:          scripts/generate_sankey.py
 plot_posteriors_script: scripts/plot_posteriors.py
 
-# IsoSeq Lima options (Lima pass 2)
-lima:
-  peek_guess: true   # --peek-guess is always used for Lima pass 2
+# Lima pass 1 options (barcode detection for array assignment; multi-library only)
+# --no-output suppresses BAM writing; only the .lima.report is needed.
+# These values are intentionally conservative relative to PacBio defaults
+# (min_score default=0, min_ref_span default=0.25) to reduce ambiguous calls.
+# If pass 1 yield is unexpectedly low, try relaxing min_score and min_ref_span.
+lima_pass1:
+  min_score:      80
+  min_score_lead: 10
+  min_ref_span:   0.75
 
 # IsoSeq refine options
 refine:

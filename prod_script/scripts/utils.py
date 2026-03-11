@@ -342,7 +342,7 @@ def load_assignments(assign_path):
     provenance, run date, and scoring parameters:
 
         # assign_kinnex.py | 2026-02-14 12:00:00 | git: a3f2c1b
-        # INF_WEIGHT=1.0  MAX_UNINF_WEIGHT=0.2  ...
+        # SPECIFIC_WEIGHT=1.0  MAX_SHARED_WEIGHT=0.2  ...
         ZMW  Assigned_Array  Classification  Top_Posterior  ...
         m64/1  LibA  HIGH_CONF  0.923  ...
 
@@ -379,6 +379,11 @@ def load_assignments(assign_path):
                 continue          # first non-comment line is the column header
             fields = line.split("\t")
             rows.append(dict(zip(header, fields)))
+
+    if header is not None and not rows:
+        raise ValueError(
+            f"Assignment file has a header but no data rows: {assign_path}"
+        )
 
     return rows
 
@@ -423,7 +428,7 @@ def parse_assignment_header(assign_path):
 
     Example header lines parsed:
         # assign_kinnex.py | 2026-02-14 12:00:00 | git: a3f2c1b-dirty
-        # INF_WEIGHT=1.0  MAX_UNINF_WEIGHT=0.2  EXTRANEOUS_PENALTY=-0.10
+        # SPECIFIC_WEIGHT=1.0  MAX_SHARED_WEIGHT=0.2  DISCORDANT_PENALTY=-0.10
         # POSTERIOR_HIGH_CONF=0.840  POSTERIOR_LOW_CONF=0.50
         # MIN_OBS_HIGH_CONF=3  MIN_OBS_LOW_CONF=2
 

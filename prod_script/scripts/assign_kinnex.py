@@ -4,7 +4,7 @@ assign_kinnex.py
 
 Single-tier Bayesian assignment of ZMWs to Kinnex array libraries.
 Classifies each ZMW by scoring it against all libraries sharing its expected
-Kinnex barcode, using informative (library-unique) and shared barcode
+Kinnex barcode, using specific (library-unique) and shared barcode
 observations weighted by specificity.
 
 Scoring weights were optimised by ML training on ground-truth pools (Feb 2026).
@@ -57,13 +57,15 @@ def get_git_provenance():
 # =======================
 # DEFAULT PARAMETERS
 # =======================
-INF_WEIGHT = 1.0             
-MAX_UNINF_WEIGHT = 0.2       
-EXTRANEOUS_PENALTY = -0.10
+SPECIFIC_WEIGHT = 1.0
+MAX_SHARED_WEIGHT = 0.2
+DISCORDANT_PENALTY = -0.10
 POSTERIOR_HIGH_CONF = 0.840
 POSTERIOR_LOW_CONF = 0.50
 MIN_OBS_HIGH_CONF = 3
 MIN_OBS_LOW_CONF = 2
+MIN_SPECIFIC_HIGH_CONF = 1   # require at least 1 specific barcode for HIGH_CONF
+MIN_SPECIFIC_LOW_CONF  = 0   # no specific-barcode floor for LOW_CONF
 
 # =======================
 # INPUT FUNCTIONS
@@ -72,8 +74,12 @@ def read_arrays(arrays_file):
     arrays = {}
     with open(arrays_file) as f:
         for line in f:
-            parts = line.strip().split()
-            if len(parts) < 3: continue
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
             arrays[parts[0]] = {'kinnex': parts[1], 'barcodes': set(parts[2:])}
     return arrays
 
@@ -109,24 +115,24 @@ def classify_single_tier(barcodes, arrays_subset, all_arrays):
     n_obs = len(barcodes)
     
     for arr_name in array_names:
-        score, inf_count, uninf_count, extr_count = 0.0, 0, 0, 0
+        score, specific_count, shared_count, discordant_count = 0.0, 0, 0, 0
         arr_barcodes = arrays_subset[arr_name]['barcodes']
         for bc in barcodes:
             if bc in arr_barcodes:
                 arrays_with_bc = set(barcode_array_map[bc]) & possible_arrays
                 if len(arrays_with_bc) == 1:
-                    score += INF_WEIGHT
-                    inf_count += 1
+                    score += SPECIFIC_WEIGHT
+                    specific_count += 1
                 else:
-                    weight = min(1.0 / len(arrays_with_bc), MAX_UNINF_WEIGHT)
+                    weight = min(1.0 / len(arrays_with_bc), MAX_SHARED_WEIGHT)
                     score += weight
-                    uninf_count += 1
+                    shared_count += 1
             else:
-                extr_count += 1
-                score += EXTRANEOUS_PENALTY
-        
-        array_scores[arr_name] = {'score': score, 'inf': inf_count, 'uninf': uninf_count, 
-                                  'extr': extr_count, 'n_obs': n_obs, 'kinnex': arrays_subset[arr_name]['kinnex']}
+                discordant_count += 1
+                score += DISCORDANT_PENALTY
+
+        array_scores[arr_name] = {'score': score, 'specific': specific_count, 'shared': shared_count,
+                                  'discordant': discordant_count, 'n_obs': n_obs, 'kinnex': arrays_subset[arr_name]['kinnex']}
 
     scores = [v['score'] for v in array_scores.values()]
     max_score = max(scores)
@@ -140,9 +146,11 @@ def classify_single_tier(barcodes, arrays_subset, all_arrays):
     res = array_scores[best_array]
     posterior = res['posterior']
     
-    if (n_obs >= MIN_OBS_HIGH_CONF and posterior >= POSTERIOR_HIGH_CONF):
+    if (n_obs >= MIN_OBS_HIGH_CONF and posterior >= POSTERIOR_HIGH_CONF
+            and res['specific'] >= MIN_SPECIFIC_HIGH_CONF):
         classification = "HIGH_CONF"
-    elif (n_obs >= MIN_OBS_LOW_CONF and posterior >= POSTERIOR_LOW_CONF):
+    elif (n_obs >= MIN_OBS_LOW_CONF and posterior >= POSTERIOR_LOW_CONF
+            and res['specific'] >= MIN_SPECIFIC_LOW_CONF):
         classification = "LOW_CONF"
     else:
         classification, best_array, posterior = "UNASSIGNED", None, 0.0
@@ -167,10 +175,10 @@ def _worker_classify(zmw_item):
     best_array, classification, posterior, scores = \
         classify_single_tier(barcodes, kinnex_arrays, _worker_arrays)
 
-    summary = {'inf': scores[best_array]['inf'], 'uninf': scores[best_array]['uninf'],
-               'extr': scores[best_array]['extr'], 'kinnex': scores[best_array]['kinnex']} \
+    summary = {'specific': scores[best_array]['specific'], 'shared': scores[best_array]['shared'],
+               'discordant': scores[best_array]['discordant'], 'kinnex': scores[best_array]['kinnex']} \
               if best_array else \
-              {'inf': 0, 'uninf': 0, 'extr': 0, 'kinnex': 'None'}
+              {'specific': 0, 'shared': 0, 'discordant': 0, 'kinnex': 'None'}
 
     return (zmw, barcodes, best_array, classification, posterior, summary)
 
@@ -207,12 +215,13 @@ def main():
         run_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         git = get_git_provenance()
         out_f.write(f"# assign_kinnex.py | {run_date} | git: {git}\n")
-        out_f.write(f"# INF_WEIGHT={INF_WEIGHT}  MAX_UNINF_WEIGHT={MAX_UNINF_WEIGHT}  EXTRANEOUS_PENALTY={EXTRANEOUS_PENALTY}\n")
+        out_f.write(f"# SPECIFIC_WEIGHT={SPECIFIC_WEIGHT}  MAX_SHARED_WEIGHT={MAX_SHARED_WEIGHT}  DISCORDANT_PENALTY={DISCORDANT_PENALTY}\n")
         out_f.write(f"# POSTERIOR_HIGH_CONF={POSTERIOR_HIGH_CONF}  POSTERIOR_LOW_CONF={POSTERIOR_LOW_CONF}\n")
         out_f.write(f"# MIN_OBS_HIGH_CONF={MIN_OBS_HIGH_CONF}  MIN_OBS_LOW_CONF={MIN_OBS_LOW_CONF}\n")
-        out_f.write("ZMW\tAssigned_Array\tClassification\tTop_Posterior\tN_Observations\tInformative_Barcodes\tUninformative_Barcodes\tExtraneous_Barcodes\tArray_Kinnex\tAll_Barcodes\n")
+        out_f.write(f"# MIN_SPECIFIC_HIGH_CONF={MIN_SPECIFIC_HIGH_CONF}  MIN_SPECIFIC_LOW_CONF={MIN_SPECIFIC_LOW_CONF}\n")
+        out_f.write("ZMW\tAssigned_Array\tClassification\tTop_Posterior\tN_Observations\tSpecific_Barcodes\tShared_Barcodes\tDiscordant_Barcodes\tArray_Kinnex\tAll_Barcodes\n")
         for zmw, barcodes, best_array, classification, posterior, summary in results:
-            out_f.write(f"{zmw}\t{best_array}\t{classification}\t{posterior:.3f}\t{len(barcodes)}\t{summary['inf']}\t{summary['uninf']}\t{summary['extr']}\t{summary['kinnex']}\t{','.join(barcodes)}\n")
+            out_f.write(f"{zmw}\t{best_array}\t{classification}\t{posterior:.3f}\t{len(barcodes)}\t{summary['specific']}\t{summary['shared']}\t{summary['discordant']}\t{summary['kinnex']}\t{','.join(barcodes)}\n")
 
 if __name__ == "__main__":
     main()

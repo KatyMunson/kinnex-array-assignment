@@ -41,6 +41,8 @@ with open(assign_file) as f:
         if line.startswith('#') or line.startswith('ZMW'):
             continue  # skip provenance comment lines and column header
         parts = line.rstrip().split("\t")
+        if len(parts) < 3:
+            continue
         zmw, lib, cls = parts[0], parts[1], parts[2]
 
         if cls == "HIGH_CONF":
@@ -98,6 +100,14 @@ unassigned_writer.close()
 # for lima_pass2 even though the split ran successfully. The sentinel BAMs
 # are valid (header-only) BAMs with zero records; lima_pass2 handles them
 # gracefully. QC records these as zero-count entries so missingness is visible.
+#
+# NOTE: all_libs is derived from the assignment output, so it only includes
+# libraries that received at least one HIGH_CONF or LOW_CONF call. If a
+# library exists in the arrays file but no ZMWs were assigned to it, it
+# will not get a sentinel BAM here. This is currently safe because
+# Snakemake discovers libraries from the split output directory, but if
+# the workflow changes to enumerate libraries from the arrays file, this
+# script would need the arrays file as an additional input.
 # ------------------
 all_libs = set(zmw2high.values()) | set(zmw2low.values())
 with pysam.AlignmentFile(skera_bam, "rb", check_sq=False) as bam_template:
@@ -123,7 +133,11 @@ with open(qc_file, "w") as out:
 total = sum(counts.values())
 assigned = total - counts.get("unassigned", 0)
 print(f"Total reads:    {total}")
-print(f"Assigned:       {assigned} ({100*assigned/total:.2f}%)")
-print(f"Unassigned:     {counts.get('unassigned', 0)} ({100*counts.get('unassigned',0)/total:.2f}%)")
+if total > 0:
+    print(f"Assigned:       {assigned} ({100*assigned/total:.2f}%)")
+    print(f"Unassigned:     {counts.get('unassigned', 0)} ({100*counts.get('unassigned',0)/total:.2f}%)")
+else:
+    print(f"Assigned:       0")
+    print(f"Unassigned:     0")
 print(f"Libraries:      {sorted(k for k in counts if k != 'unassigned')}")
 print(f"QC written to:  {qc_file}")

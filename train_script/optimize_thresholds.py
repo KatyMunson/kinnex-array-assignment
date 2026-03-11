@@ -8,7 +8,7 @@ yield subject to a target accuracy. Produces plots and a JSON recommendations
 file.
 
 See optimize_thresholds_v2.py for multi-dimensional search over posterior,
-minimum observations, and minimum informative barcode counts.
+minimum observations, and minimum specific barcode counts.
 
 Usage:
     python optimize_thresholds.py \\
@@ -23,6 +23,10 @@ Created: 2026-02
 import argparse
 import json
 import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../prod_script/scripts'))
+import utils
+
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -43,11 +47,18 @@ def load_data(assignment_files, lookup_files):
     
     print(f"Loaded {len(lookup_map):,} ground truth ZMWs")
     
-    # Load assignments
+    # Load assignments — warn if files were produced with different parameters
+    seen_params = {}
     all_data = []
     for assign_file in assignment_files:
         print(f"Processing {assign_file}...")
-        df = pd.read_csv(assign_file, sep='\t', dtype=str, comment='#')
+        header = utils.parse_assignment_header(assign_file)
+        param_sig = {k: v for k, v in header.items() if k not in ('run_date', 'git')}
+        if seen_params and param_sig != seen_params:
+            print(f"WARNING: {Path(assign_file).name} has different scoring parameters "
+                  f"than previous files — mixing may produce inconsistent results.", flush=True)
+        seen_params = param_sig
+        df = utils.load_assignments_df(assign_file)
         df['Top_Posterior'] = pd.to_numeric(df['Top_Posterior'], errors='coerce')
         
         for _, row in df.iterrows():
@@ -74,8 +85,8 @@ def load_data(assignment_files, lookup_files):
     print(f"\nTotal assignments: {len(df):,}")
     print(f"  Correct: {df['correct'].sum():,} ({df['correct'].mean()*100:.2f}%)")
     print(f"  Incorrect: {(~df['correct']).sum():,} ({(~df['correct']).mean()*100:.2f}%)")
-    
-    return df
+
+    return df, seen_params
 
 
 def analyze_posterior_distribution(df):
@@ -299,10 +310,10 @@ def main():
     parser.add_argument('--assignments', nargs='+', required=True, help='Assignment result files')
     parser.add_argument('--lookups', nargs='+', required=True, help='Ground truth lookup files')
     parser.add_argument('--output', default='threshold_recommendations.json', help='Output file')
-    parser.add_argument('--current-high-conf', type=float, default=0.90, 
-                        help='Current HIGH_CONF threshold (default: 0.90)')
-    parser.add_argument('--current-low-conf', type=float, default=0.60,
-                        help='Current LOW_CONF threshold (default: 0.60)')
+    parser.add_argument('--current-high-conf', type=float, default=None,
+                        help='Current HIGH_CONF threshold for comparison (default: read from assignment file header)')
+    parser.add_argument('--current-low-conf', type=float, default=None,
+                        help='Current LOW_CONF threshold for comparison (default: read from assignment file header)')
     parser.add_argument('--target-accuracy', type=float, default=0.9999,
                         help='Target accuracy for HIGH_CONF (default: 0.9999 = 99.99%%)')
     
@@ -325,8 +336,14 @@ def main():
     print(f"Found {len(lookup_files)} lookup files")
     
     # Load data
-    df = load_data(assignment_files, lookup_files)
-    
+    df, seen_params = load_data(assignment_files, lookup_files)
+
+    # Seed --current-* from assignment file header when not explicitly provided
+    if args.current_high_conf is None:
+        args.current_high_conf = float(seen_params.get('POSTERIOR_HIGH_CONF', 0.840))
+    if args.current_low_conf is None:
+        args.current_low_conf = float(seen_params.get('POSTERIOR_LOW_CONF', 0.50))
+
     # Analyze distribution
     analyze_posterior_distribution(df)
     
@@ -357,7 +374,7 @@ def main():
         json.dump(output_data, f, indent=2)
     
     print(f"\nResults saved to {args.output}")
-    print("\nTo use these thresholds, update your assign_kinnex script:")
+    print("\nTo use these thresholds, update the DEFAULT PARAMETERS section of assign_kinnex.py:")
     print(f"  POSTERIOR_HIGH_CONF = {recommendations['HIGH_CONF']['threshold']:.3f}")
     print(f"  POSTERIOR_LOW_CONF = {recommendations['LOW_CONF']['threshold']:.3f}")
 
