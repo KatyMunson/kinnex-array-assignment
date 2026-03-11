@@ -124,7 +124,7 @@ def load_training_data(assignment_files, lookup_files, arrays):
             })
     
     print(f"Collected {len(training_data):,} training examples")
-    return training_data
+    return training_data, seen_params
 
 
 def extract_features(zmw, barcodes, assigned_array, true_array, arrays, classification, row):
@@ -301,71 +301,81 @@ def analyze_errors(model, feature_names, training_data, arrays):
             print(f"{cls:12s}: {cls_acc*100:.2f}% accuracy ({cls_correct}/{cls_total} actually correct)")
 
 
-def extract_weight_recommendations(model, feature_names, model_type='logistic'):
+def extract_weight_recommendations(model, feature_names, model_type='logistic', seen_params=None):
     """
     Extract recommended weight adjustments from trained model.
+
+    seen_params : dict, optional
+        Parsed header parameters from the assignment file(s), as returned by
+        utils.parse_assignment_header(). When provided, the current
+        SPECIFIC_WEIGHT / MAX_SHARED_WEIGHT / DISCORDANT_PENALTY values are
+        read from the header so the comparison reflects the actual weights
+        used during assignment rather than hardcoded defaults.
     """
     print(f"\n=== WEIGHT RECOMMENDATIONS ===")
-    
+
+    # Baseline weights: prefer values from the assignment file header so the
+    # comparison is against what was actually used, not a hardcoded guess.
+    if seen_params is None:
+        seen_params = {}
+    current_specific   = float(seen_params.get('SPECIFIC_WEIGHT',    1.0))
+    current_shared     = float(seen_params.get('MAX_SHARED_WEIGHT',  0.2))
+    current_discordant = float(seen_params.get('DISCORDANT_PENALTY', -0.10))
+
     if model_type == 'logistic':
         coef = model.coef_[0]
-        
+
         # Find coefficients for key features
         feature_dict = dict(zip(feature_names, coef))
-        
+
         print("\nLogistic Regression Coefficients (higher = more important for correct assignment):")
         print(f"  Specific BC fraction:    {feature_dict.get('specific_frac', 0):+.4f}")
         print(f"  Shared BC fraction:      {feature_dict.get('shared_frac', 0):+.4f}")
         print(f"  Discordant BC fraction:  {feature_dict.get('discordant_frac', 0):+.4f}")
         print(f"  Specific - Discordant:   {feature_dict.get('specific_minus_discordant', 0):+.4f}")
         print(f"  True match fraction:       {feature_dict.get('true_match_frac', 0):+.4f}")
-        
+
         # Translate to weight recommendations
         print("\nSuggested Weight Adjustments:")
-        
-        # Current weights
-        current_specific   = 1.0
-        current_shared     = 0.2
-        current_discordant = -0.10
 
         # Scale based on relative coefficients
         specific_coef   = feature_dict.get('specific_frac', 1.0)
         shared_coef     = feature_dict.get('shared_frac', 0.5)
         discordant_coef = feature_dict.get('discordant_frac', -1.0)
 
-        # Normalize to keep specific at 1.0 as reference
+        # Normalize to keep specific at current value as reference
         scale = abs(specific_coef) if abs(specific_coef) > 0 else 1.0
 
         recommended = {
             'SPECIFIC_WEIGHT':    current_specific,  # Keep as reference
             'MAX_SHARED_WEIGHT':  max(0.01, abs(shared_coef / scale) * current_shared),
-            'DISCORDANT_PENALTY': min(-0.1, (discordant_coef / scale) * abs(current_discordant)),
+            'DISCORDANT_PENALTY': min(-0.01, (discordant_coef / scale) * abs(current_discordant)),
             'CONFIDENCE': 'medium'
         }
 
         print(f"  SPECIFIC_WEIGHT:    {recommended['SPECIFIC_WEIGHT']:.2f} (unchanged, reference)")
-        print(f"  MAX_SHARED_WEIGHT:  {recommended['MAX_SHARED_WEIGHT']:.2f} (current: {current_shared})")
-        print(f"  DISCORDANT_PENALTY: {recommended['DISCORDANT_PENALTY']:.2f} (current: {current_discordant})")
-        
+        print(f"  MAX_SHARED_WEIGHT:  {recommended['MAX_SHARED_WEIGHT']:.4f} (current: {current_shared})")
+        print(f"  DISCORDANT_PENALTY: {recommended['DISCORDANT_PENALTY']:.4f} (current: {current_discordant})")
+
     else:  # Random Forest
         # For RF, we can't directly extract weight recommendations
         # But we can use feature importance
         importance = model.feature_importances_
         feature_importance = dict(zip(feature_names, importance))
-        
+
         print("\nRandom Forest Feature Importance:")
         print(f"  Specific BC fraction:    {feature_importance.get('specific_frac', 0):.4f}")
         print(f"  Shared BC fraction:      {feature_importance.get('shared_frac', 0):.4f}")
         print(f"  Discordant BC fraction:  {feature_importance.get('discordant_frac', 0):.4f}")
 
         recommended = {
-            'SPECIFIC_WEIGHT':    1.0,
-            'MAX_SHARED_WEIGHT':  0.5,
-            'DISCORDANT_PENALTY': -1.0,
+            'SPECIFIC_WEIGHT':    current_specific,
+            'MAX_SHARED_WEIGHT':  current_shared,
+            'DISCORDANT_PENALTY': current_discordant,
             'CONFIDENCE': 'low',
             'NOTE': 'Random Forest does not provide direct weight translations. Use logistic regression for interpretable weights.'
         }
-    
+
     return recommended
 
 
@@ -940,7 +950,7 @@ def main():
     arrays = utils.read_arrays(args.arrays)
     print(f"Loaded {len(arrays)} array definitions")
     
-    training_data = load_training_data(assignment_files, lookup_files, arrays)
+    training_data, seen_params = load_training_data(assignment_files, lookup_files, arrays)
     
     if len(training_data) < 100:
         print(f"WARNING: Only {len(training_data)} training examples. Need at least 100 for reliable training.")
@@ -953,7 +963,7 @@ def main():
     analyze_errors(model, feature_names, training_data, arrays)
     
     # Extract recommendations
-    recommended_weights = extract_weight_recommendations(model, feature_names, args.model)
+    recommended_weights = extract_weight_recommendations(model, feature_names, args.model, seen_params)
 
     # Plot diagnostic figures
     plot_prefix = args.plot_prefix or str(Path(args.output).with_suffix(''))
