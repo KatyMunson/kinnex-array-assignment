@@ -831,15 +831,14 @@ def main():
         json.dump(output_data, f, indent=2)
 
     print(f"\nResults saved to {args.output}")
-    print("\nTo use these thresholds, update assign_kinnex.py:")
+    print("\nTo use these thresholds, update the DEFAULT PARAMETERS section of assign_kinnex.py:")
     rec = recommendations['HIGH_CONF']
-    print(f"  POSTERIOR_HIGH_CONF = {rec['posterior']:.4f}")
-    print(f"  MIN_OBS_HIGH_CONF   = {int(rec['min_obs'])}")
+    print(f"  POSTERIOR_HIGH_CONF    = {rec['posterior']:.4f}")
+    print(f"  MIN_OBS_HIGH_CONF      = {int(rec['min_obs'])}")
     if not args.no_specific_sweep:
-        print(f"  MIN_SPECIFIC_HIGH_CONF = {int(rec['min_specific'])}  "
-              f"(add this constant if adopting the specific gate)")
+        print(f"  MIN_SPECIFIC_HIGH_CONF = {int(rec['min_specific'])}")
     lc = recommendations['LOW_CONF']
-    print(f"  POSTERIOR_LOW_CONF  = {lc.get('posterior', 0.5):.4f}")
+    print(f"  POSTERIOR_LOW_CONF     = {lc.get('posterior', 0.5):.4f}")
 
 
 if __name__ == '__main__':

@@ -374,7 +374,7 @@ def main():
         json.dump(output_data, f, indent=2)
     
     print(f"\nResults saved to {args.output}")
-    print("\nTo use these thresholds, update your assign_kinnex script:")
+    print("\nTo use these thresholds, update the DEFAULT PARAMETERS section of assign_kinnex.py:")
     print(f"  POSTERIOR_HIGH_CONF = {recommendations['HIGH_CONF']['threshold']:.3f}")
     print(f"  POSTERIOR_LOW_CONF = {recommendations['LOW_CONF']['threshold']:.3f}")
 
