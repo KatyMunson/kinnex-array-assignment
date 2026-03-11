@@ -379,7 +379,7 @@ def extract_weight_recommendations(model, feature_names, model_type='logistic', 
     return recommended
 
 
-def plot_model_diagnostics(model, feature_names, training_data, model_type, output_prefix):
+def plot_model_diagnostics(model, feature_names, training_data, model_type, output_prefix, seen_params=None):
     """
     2×2 model diagnostic figure (original plot, now a separate function):
       [0,0] Feature importance / logistic coefficients
@@ -388,6 +388,11 @@ def plot_model_diagnostics(model, feature_names, training_data, model_type, outp
       [1,1] Model calibration curve
     """
     import matplotlib.gridspec as gridspec
+
+    if seen_params is None:
+        seen_params = {}
+    hc_thresh = float(seen_params.get('POSTERIOR_HIGH_CONF', 0.840))
+    lc_thresh  = float(seen_params.get('POSTERIOR_LOW_CONF',  0.500))
 
     X = np.array([[d['features'][f] for f in feature_names] for d in training_data])
     y = np.array([d['label'] for d in training_data])
@@ -434,10 +439,10 @@ def plot_model_diagnostics(model, feature_names, training_data, model_type, outp
             label='Correct', density=True)
     ax.hist(posteriors[y == 0], bins=bins, alpha=0.55, color='tomato',
             label='Incorrect', density=True)
-    ax.axvline(0.840, color='green',  linestyle='--', linewidth=1.2,
-               label='HC threshold (0.840)')
-    ax.axvline(0.500, color='orange', linestyle='--', linewidth=1.2,
-               label='LC threshold (0.500)')
+    ax.axvline(hc_thresh, color='green',  linestyle='--', linewidth=1.2,
+               label=f'HC threshold ({hc_thresh})')
+    ax.axvline(lc_thresh,  color='orange', linestyle='--', linewidth=1.2,
+               label=f'LC threshold ({lc_thresh})')
     ax.set_xlabel('Current Posterior Score', fontsize=8)
     ax.set_ylabel('Density', fontsize=8)
     ax.set_title('Posterior Distribution by Correctness', fontsize=9)
@@ -968,7 +973,7 @@ def main():
     # Plot diagnostic figures
     plot_prefix = args.plot_prefix or str(Path(args.output).with_suffix(''))
     print("\nGenerating plots...")
-    plot_model_diagnostics(model, feature_names, training_data, args.model, plot_prefix)
+    plot_model_diagnostics(model, feature_names, training_data, args.model, plot_prefix, seen_params)
     plot_weight_sensitivity(training_data, recommended_weights, plot_prefix)
     plot_error_anatomy(training_data, plot_prefix)
     plot_specific_shared_scatter(training_data, plot_prefix)
@@ -989,11 +994,10 @@ def main():
         json.dump(output_data, f, indent=2)
     
     print(f"\nResults saved to {args.output}")
-    print(f"\nTo use these weights, update your assign_kinnex script:")
+    print(f"\nTo use these weights, update the DEFAULT PARAMETERS section of assign_kinnex.py:")
     print(f"  SPECIFIC_WEIGHT    = {recommended_weights['SPECIFIC_WEIGHT']}")
     print(f"  MAX_SHARED_WEIGHT  = {recommended_weights['MAX_SHARED_WEIGHT']:.3f}")
-    print(f"  # And change line with 'score -= 1.0' to:")
-    print(f"  score += {recommended_weights['DISCORDANT_PENALTY']:.3f}  # (was -1.0)")
+    print(f"  DISCORDANT_PENALTY = {recommended_weights['DISCORDANT_PENALTY']:.3f}")
 
 
 if __name__ == '__main__':
