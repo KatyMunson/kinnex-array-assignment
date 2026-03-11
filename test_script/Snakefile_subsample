@@ -84,7 +84,10 @@ def load_and_validate_data():
         raise ValueError(f"manifest.tsv missing required columns: {required_manifest_cols}")
     
     manifest_df = manifest_df.set_index("Kinnex_Lib")
-    
+    dupes = manifest_df.index[manifest_df.index.duplicated()].unique().tolist()
+    if dupes:
+        raise ValueError(f"Duplicate Kinnex_Lib entries in manifest: {dupes}")
+
     logging.info(f"Loaded {len(pool_df)} pool entries and {len(manifest_df)} manifest entries")
     return pool_df, manifest_df
 
@@ -130,7 +133,7 @@ def bam_path(lib):
     """Get BAM path for a library, raise if missing."""
     if lib not in manifest_df.index:
         raise ValueError(f"Library {lib} not found in manifest")
-    path = manifest_df.loc[lib, "PreSkera_BAM"]
+    path = manifest_df.at[lib, "PreSkera_BAM"]
     if not path or not os.path.exists(path):
         raise ValueError(f"PreSkera BAM path for {lib} does not exist: {path}")
     return path
