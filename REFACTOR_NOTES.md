@@ -81,6 +81,46 @@ these parameters.
 
 ---
 
+## ~~Bug fix pass~~ — COMPLETED (Mar 2026)
+
+**Issue:** Code review identified 10 bugs: 3 crash-on-valid-input, 5 silently
+wrong output, 2 documentation mismatches. See CHANGELOG.md for the full list.
+
+**Resolution:** All 10 fixed. Key fixes: ZeroDivisionError in
+split_skera_by_library.py; or-None dropping valid zero FLNC counts in
+aggregate_pipeline_qc.py; stale hardcoded baseline weights in training scripts
+(now read from assignment file header); split() vs split("\t") inconsistency
+between assign_kinnex.py and utils.py.
+
+---
+
+## ~~Lima pass 1 flags hardcoded in Snakefile~~ — COMPLETED (Mar 2026)
+
+**Issue:** min_score, min_score_lead, min_ref_span were hardcoded in the
+lima_isoseq rule shell block. Users troubleshooting low pass rates had to
+edit the Snakefile directly. A dead lima: peek_guess: true key in config.yaml
+gave the false impression that Lima options were already configurable.
+
+**Resolution:** All three params moved to a lima_pass1: section in config.yaml
+with notes on PacBio defaults and when to adjust them. The dead config key
+was removed. Snakefile rule now reads from config[lima_pass1].
+
+---
+
+## Sentinel BAMs missing for zero-assignment libraries
+
+**Issue:** split_skera_by_library.py creates sentinel (header-only) BAMs for
+zero-read confidence tiers to prevent Snakemake MissingInputException. However,
+it only creates them for libraries that appear in the assignment file. A library
+present in the arrays file that received zero ZMW assignments will have no
+sentinel BAM, which can cause a downstream MissingInputException.
+
+**To do:** Pass the arrays file path as an additional input to the split script
+so it can create sentinel BAMs for all expected libraries, not just those with
+at least one assignment.
+
+---
+
 ## Code commenting pass
 
 **Issue:** Comments throughout the codebase are currently written at a
