@@ -325,8 +325,8 @@ def extract_weight_recommendations(model, feature_names, model_type='logistic'):
         
         # Current weights
         current_specific   = 1.0
-        current_shared     = 0.5
-        current_discordant = -1.0
+        current_shared     = 0.2
+        current_discordant = -0.10
 
         # Scale based on relative coefficients
         specific_coef   = feature_dict.get('specific_frac', 1.0)

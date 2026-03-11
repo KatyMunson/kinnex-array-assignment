@@ -8,7 +8,7 @@ confidence tier (HIGH_CONF / LOW_CONF). Requires ground truth lookup from
 Snakefile_subsample to label correctness.
 
 Called by Snakefile_qc (rule visualize_posteriors), or run standalone:
-    python visualize_posteriors.py <assignments.txt> <lookup.txt> <output_prefix>
+    python visualize_posteriors.py <assignments.txt> <lookup.txt> <plot.png> <threshold.csv>
 
 Author:  KM
 Created: 2026-02
@@ -51,7 +51,7 @@ def load_assignment_data(assignment_file, lookup_file):
     
     # Add total barcodes and specific fraction
     merged['Total_Barcodes']    = merged['Specific_Barcodes'] + merged['Shared_Barcodes']
-    merged['Specific_Fraction'] = merged['Specific_Barcodes'] / merged['Total_Barcodes']
+    merged['Specific_Fraction'] = merged['Specific_Barcodes'] / merged['Total_Barcodes'].replace(0, np.nan)
     
     return merged
 

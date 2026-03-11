@@ -380,6 +380,11 @@ def load_assignments(assign_path):
             fields = line.split("\t")
             rows.append(dict(zip(header, fields)))
 
+    if header is not None and not rows:
+        raise ValueError(
+            f"Assignment file has a header but no data rows: {assign_path}"
+        )
+
     return rows
 
 

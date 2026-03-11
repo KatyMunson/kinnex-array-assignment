@@ -310,10 +310,10 @@ def main():
     parser.add_argument('--assignments', nargs='+', required=True, help='Assignment result files')
     parser.add_argument('--lookups', nargs='+', required=True, help='Ground truth lookup files')
     parser.add_argument('--output', default='threshold_recommendations.json', help='Output file')
-    parser.add_argument('--current-high-conf', type=float, default=0.90, 
-                        help='Current HIGH_CONF threshold (default: 0.90)')
-    parser.add_argument('--current-low-conf', type=float, default=0.60,
-                        help='Current LOW_CONF threshold (default: 0.60)')
+    parser.add_argument('--current-high-conf', type=float, default=0.840,
+                        help='Current HIGH_CONF threshold (default: 0.840)')
+    parser.add_argument('--current-low-conf', type=float, default=0.50,
+                        help='Current LOW_CONF threshold (default: 0.50)')
     parser.add_argument('--target-accuracy', type=float, default=0.9999,
                         help='Target accuracy for HIGH_CONF (default: 0.9999 = 99.99%%)')
     

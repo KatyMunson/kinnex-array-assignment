@@ -74,8 +74,12 @@ def read_arrays(arrays_file):
     arrays = {}
     with open(arrays_file) as f:
         for line in f:
-            parts = line.strip().split()
-            if len(parts) < 3: continue
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
             arrays[parts[0]] = {'kinnex': parts[1], 'barcodes': set(parts[2:])}
     return arrays
 
