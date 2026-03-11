@@ -195,7 +195,7 @@ rule subsample_library:
                 # across the full SMRT cell sum to 1.0). Use it directly as the proportion —
                 # no normalisation within KN_BC group, since that would distort the relative
                 # sizes of libraries that share a Kinnex barcode.
-                sc_value = pool_subset["SC"].values[0]
+                sc_value = float(pool_subset["SC"].values[0])
                 target_reads = int(TARGET_TOTAL_READS * sc_value)
                 logging.info(f"[PROPORTIONAL] {lib}: SC={sc_value:.6f}, target={target_reads:,} reads")
             else:  # even
