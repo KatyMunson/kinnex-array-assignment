@@ -22,6 +22,11 @@ results/
 *.h5
 *.hdf5
 
+# Config files contain local absolute paths — keep only the .example templates
+prod_script/config.yaml
+test_script/config_qc.yaml
+test_script/config_subsample.yaml
+
 # Sample manifests and pool tables with real data
 # (keep example/template versions, exclude real ones)
 *.tab
