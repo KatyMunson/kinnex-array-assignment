@@ -702,8 +702,10 @@ rule sankey_plot:
     pipeline: S-reads → assignment → libraries → FLNC.
     """
     input:
-        qc_dir = "results/qc/qc_summary.tsv",
-        script = SANKEY_SCRIPT
+        qc_skera  = "results/qc/qc_skera.tsv",
+        qc_split  = "results/qc/qc_split_skera.tsv",
+        qc_refine = "results/qc/qc_refine.tsv",
+        script    = SANKEY_SCRIPT
     output:
         "results/qc/pipeline_read_flow.html"
     threads: 1

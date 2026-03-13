@@ -78,8 +78,8 @@ for s in samples:
 
     sp = df_split[df_split["sample"] == s]
     sp_unassigned  = sp[sp["library"] == "unassigned"]
-    sp_highconf    = sp[(sp["library"] != "unassigned") & (sp["confidence"] == "high_conf")]
-    sp_lowconf     = sp[(sp["library"] != "unassigned") & (sp["confidence"] == "low_conf")]
+    sp_highconf    = sp[(sp["library"] != "unassigned") & (sp["confidence"] == "highconf")]
+    sp_lowconf     = sp[(sp["library"] != "unassigned") & (sp["confidence"] == "lowconf")]
 
     assigned_total   = int(sp_highconf["read_count"].sum()) + int(sp_lowconf["read_count"].sum())
     unassigned_total = int(sp_unassigned["read_count"].sum()) if len(sp_unassigned) else 0
@@ -105,11 +105,11 @@ for s in samples:
         lcolor   = lib_color_map.get(lib, "#999999")
         lcolor_t = lcolor + "66"
 
-        for conf, conf_label, conf_alpha in [
-            ("high_conf", "highconf", "99"),
-            ("low_conf",  "lowconf",  "55"),
+        for conf_label, conf_alpha in [
+            ("highconf", "99"),
+            ("lowconf",  "55"),
         ]:
-            lib_reads_rows = sp[(sp["library"] == lib) & (sp["confidence"] == conf)]
+            lib_reads_rows = sp[(sp["library"] == lib) & (sp["confidence"] == conf_label)]
             if lib_reads_rows.empty:
                 continue
             lib_reads = int(lib_reads_rows["read_count"].sum())
