@@ -532,17 +532,13 @@ rule aggregate_qc:
             }
 
             all_df = []
-            for f in input.summaries:
+            for pool, knbc, f in zip(POOLS, KNBCS, input.summaries):
                 try:
                     df = pd.read_csv(f, sep="\t")
                     df = df[df["Category"].isin(categories)].copy()
                 except Exception as e:
                     raise ValueError(f"Error reading summary file {f}: {e}")
 
-                # Extract pool and knbc from path: per_pool/{pool}_KN_{knbc}/summary.txt
-                parts = Path(f).parent.name.split("_KN_")
-                pool = parts[0]
-                knbc = parts[1]
                 df["Pool"] = pool
                 df["KN_BC"] = knbc
 
