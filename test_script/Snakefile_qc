@@ -107,169 +107,182 @@ rule check_assignments:
     threads: 2
     resources:
         mem=8, hrs=1
+    log:
+        "results/logs/{pool}_KN_{knbc}/check_assignments.log"
     run:
+        os.makedirs(os.path.dirname(log[0]), exist_ok=True)
+        fh = logging.FileHandler(log[0])
+        fh.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
+        logging.getLogger().addHandler(fh)
         try:
-            truth_df = pd.read_csv(input.read_lookup, sep="\t", dtype=str)
-            assign_df = pd.read_csv(input.assignments, sep="\t", dtype=str, comment='#')
-        except Exception as e:
-            raise ValueError(f"Error reading input files: {e}")
+            try:
+                truth_df = pd.read_csv(input.read_lookup, sep="\t", dtype=str)
+                assign_df = pd.read_csv(input.assignments, sep="\t", dtype=str, comment='#')
+            except Exception as e:
+                raise ValueError(f"Error reading input files: {e}")
 
-        # Strip /ccs suffix from truth read names if present
-        # Pre-Skera format: movie/zmw/ccs  Post-Skera format: movie/zmw
-        truth_df['Read'] = truth_df['Read'].apply(
-            lambda x: x[:-4] if x.endswith('/ccs') else x
-        )
-        truth_df = truth_df.rename(columns={'Read': 'ZMW'})
-
-        assign_df['Segments_per_ZMW'] = assign_df['All_Barcodes'].str.count(',') + 1
-        total_segments = assign_df['Segments_per_ZMW'].sum()
-        total_zmws = truth_df["ZMW"].nunique()
-        logging.info(f"Pool {wildcards.pool}, KN_BC {wildcards.knbc}: {total_zmws:,} ZMWs ({total_segments:,} segments)")
-
-        merged = pd.merge(assign_df, truth_df, on="ZMW", how="left")
-        merged['Top_Posterior'] = pd.to_numeric(merged['Top_Posterior'], errors='coerce')
-        merged['Specific_Barcodes'] = pd.to_numeric(merged['Specific_Barcodes'], errors='coerce')
-        merged['Shared_Barcodes']   = pd.to_numeric(merged['Shared_Barcodes'],   errors='coerce')
-        merged['Specific_Fraction'] = merged['Specific_Barcodes'] / (merged['Specific_Barcodes'] + merged['Shared_Barcodes'])
-        merged['Correct'] = merged['Assigned_Array'] == merged['KinnexLib']
-
-        counts = {"HIGH_CONF_correct": 0, "HIGH_CONF_incorrect": 0,
-                  "LOW_CONF_correct": 0, "LOW_CONF_incorrect": 0, "UNASSIGNED": 0}
-        counts_segments = {"HIGH_CONF_correct": 0, "HIGH_CONF_incorrect": 0,
-                           "LOW_CONF_correct": 0, "LOW_CONF_incorrect": 0, "UNASSIGNED": 0}
-        high_conf_errors = []
-        low_conf_errors = []
-
-        for _, row in merged.iterrows():
-            cls = row["Classification"]
-            assigned = row["Assigned_Array"]
-            true_lib = row["KinnexLib"]
-            zmw = row["ZMW"]
-            segments = row["Segments_per_ZMW"]
-            top_posterior = row.get("Top_Posterior", "N/A")
-            specific_bc = row.get("Specific_Barcodes", "N/A")
-            shared_bc   = row.get("Shared_Barcodes",   "N/A")
-            all_bc = row.get("All_Barcodes", "N/A")
-
-            if cls == "HIGH_CONF":
-                if assigned == true_lib:
-                    counts["HIGH_CONF_correct"] += 1
-                    counts_segments["HIGH_CONF_correct"] += segments
-                else:
-                    counts["HIGH_CONF_incorrect"] += 1
-                    counts_segments["HIGH_CONF_incorrect"] += segments
-                    high_conf_errors.append({
-                        "ZMW": zmw, "Segments": segments,
-                        "True_Library": true_lib, "Assigned_Library": assigned,
-                        "Top_Posterior": top_posterior,
-                        "Specific_BC": specific_bc, "Shared_BC": shared_bc,
-                        "All_Barcodes": all_bc
-                    })
-            elif cls == "LOW_CONF":
-                if assigned == true_lib:
-                    counts["LOW_CONF_correct"] += 1
-                    counts_segments["LOW_CONF_correct"] += segments
-                else:
-                    counts["LOW_CONF_incorrect"] += 1
-                    counts_segments["LOW_CONF_incorrect"] += segments
-                    low_conf_errors.append({
-                        "ZMW": zmw, "Segments": segments,
-                        "True_Library": true_lib, "Assigned_Library": assigned,
-                        "Top_Posterior": top_posterior,
-                        "Specific_BC": specific_bc, "Shared_BC": shared_bc,
-                        "All_Barcodes": all_bc
-                    })
-            elif cls == "UNASSIGNED":
-                counts["UNASSIGNED"] += 1
-                counts_segments["UNASSIGNED"] += segments
-
-        # Write detailed error report
-        with open(output.errors, "w") as f:
-            f.write("=== HIGH CONFIDENCE ERRORS ===\n")
-            f.write(f"Total: {len(high_conf_errors)} ZMWs ({sum(e['Segments'] for e in high_conf_errors)} segments)\n\n")
-            for err in high_conf_errors[:50]:
-                f.write(f"ZMW: {err['ZMW']} ({err['Segments']} segments)\n")
-                f.write(f"  True Library:     {err['True_Library']}\n")
-                f.write(f"  Assigned Library: {err['Assigned_Library']}\n")
-                f.write(f"  Top Posterior:    {err['Top_Posterior']}\n")
-                f.write(f"  Specific BC:      {err['Specific_BC']}\n")
-                f.write(f"  Shared BC:        {err['Shared_BC']}\n")
-                f.write(f"  All Barcodes:     {err['All_Barcodes']}\n\n")
-            if len(high_conf_errors) > 50:
-                f.write(f"... and {len(high_conf_errors) - 50} more ZMWs\n\n")
-            f.write("\n=== LOW CONFIDENCE ERRORS ===\n")
-            f.write(f"Total: {len(low_conf_errors)} ZMWs ({sum(e['Segments'] for e in low_conf_errors)} segments)\n\n")
-            for err in low_conf_errors[:50]:
-                f.write(f"ZMW: {err['ZMW']} ({err['Segments']} segments)\n")
-                f.write(f"  True Library:     {err['True_Library']}\n")
-                f.write(f"  Assigned Library: {err['Assigned_Library']}\n")
-                f.write(f"  Top Posterior:    {err['Top_Posterior']}\n")
-                f.write(f"  Specific BC:      {err['Specific_BC']}\n")
-                f.write(f"  Shared BC:        {err['Shared_BC']}\n")
-                f.write(f"  All Barcodes:     {err['All_Barcodes']}\n\n")
-            if len(low_conf_errors) > 50:
-                f.write(f"... and {len(low_conf_errors) - 50} more ZMWs\n")
-
-        # Write summary
-        with open(output.summary, "w") as f:
-            f.write("Category\tCount\tPercent\tSegmentCount\tSegmentPercent\n")
-            for cat in counts.keys():
-                zmw_cnt = counts[cat]
-                zmw_pct = (zmw_cnt / total_zmws * 100) if total_zmws > 0 else 0.0
-                seg_cnt = counts_segments[cat]
-                seg_pct = (seg_cnt / total_segments * 100) if total_segments > 0 else 0.0
-                f.write(f"{cat}\t{zmw_cnt}\t{zmw_pct:.2f}\t{seg_cnt}\t{seg_pct:.2f}\n")
-
-        logging.info(f"Pool {wildcards.pool}, KN_BC {wildcards.knbc} QC:")
-        logging.info(f"  === PER ZMW ===")
-        for cat, cnt in counts.items():
-            logging.info(f"  {cat:25s}: {cnt:6,} ZMWs ({cnt/total_zmws*100:5.2f}%)")
-        logging.info(f"  === PER SEGMENT ===")
-        for cat, cnt in counts_segments.items():
-            logging.info(f"  {cat:25s}: {cnt:6,} segments ({cnt/total_segments*100:5.2f}%)")
-
-        # Threshold analysis
-        thresholds = [
-            {'name': 'Current HIGH_CONF',      'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
-            {'name': 'Posterior >= 0.90',      'posterior': 0.90, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
-            {'name': 'Posterior >= 0.95',      'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
-            {'name': 'Posterior >= 0.99',      'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
-            {'name': 'SpecBC >= 2',            'posterior': 0.0,  'min_specific_bc': 2, 'specific_frac': 0.0, 'min_segments': 0},
-            {'name': 'SpecBC >= 3',            'posterior': 0.0,  'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
-            {'name': 'Segments >= 3',          'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
-            {'name': 'Segments >= 4',          'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 4},
-            {'name': 'Post>=0.95+SpecBC>=3',   'posterior': 0.95, 'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
-            {'name': 'Post>=0.95+Seg>=3',      'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
-            {'name': 'Post>=0.99+Seg>=3',      'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
-        ]
-
-        high_conf_df = merged[merged['Classification'] == 'HIGH_CONF'].copy()
-        threshold_results = []
-        for thresh in thresholds:
-            mask = (
-                (high_conf_df['Top_Posterior'] >= thresh['posterior']) &
-                (high_conf_df['Specific_Barcodes'] >= thresh['min_specific_bc']) &
-                (high_conf_df['Specific_Fraction'] >= thresh['specific_frac']) &
-                (high_conf_df['Segments_per_ZMW'] >= thresh['min_segments'])
+            # Strip /ccs suffix from truth read names if present
+            # Pre-Skera format: movie/zmw/ccs  Post-Skera format: movie/zmw
+            truth_df['Read'] = truth_df['Read'].apply(
+                lambda x: x[:-4] if x.endswith('/ccs') else x
             )
-            filtered = high_conf_df[mask]
-            if len(filtered) == 0:
-                continue
-            total_f = len(filtered)
-            correct_f = filtered['Correct'].sum()
-            accuracy = correct_f / total_f * 100
-            kept_pct = total_f / len(high_conf_df) * 100 if len(high_conf_df) > 0 else 0
-            threshold_results.append({
-                'Threshold':            thresh['name'],
-                'HIGH_CONF_ZMWs_Kept':  total_f,
-                'ZMWs_Correct':         correct_f,
-                'ZMWs_Incorrect':       total_f - correct_f,
-                'Accuracy_%':           f"{accuracy:.2f}",
-                'Kept_%_of_HIGH_CONF':  f"{kept_pct:.1f}",
-            })
+            truth_df = truth_df.rename(columns={'Read': 'ZMW'})
 
-        pd.DataFrame(threshold_results).to_csv(output.threshold_table, index=False)
-        
+            assign_df['Segments_per_ZMW'] = assign_df['All_Barcodes'].str.count(',') + 1
+            total_segments = assign_df['Segments_per_ZMW'].sum()
+            total_zmws = truth_df["ZMW"].nunique()
+            logging.info(f"Pool {wildcards.pool}, KN_BC {wildcards.knbc}: {total_zmws:,} ZMWs ({total_segments:,} segments)")
+
+            merged = pd.merge(assign_df, truth_df, on="ZMW", how="left")
+            merged['Top_Posterior'] = pd.to_numeric(merged['Top_Posterior'], errors='coerce')
+            merged['Specific_Barcodes'] = pd.to_numeric(merged['Specific_Barcodes'], errors='coerce')
+            merged['Shared_Barcodes']   = pd.to_numeric(merged['Shared_Barcodes'],   errors='coerce')
+            merged['Specific_Fraction'] = merged['Specific_Barcodes'] / (merged['Specific_Barcodes'] + merged['Shared_Barcodes'])
+            merged['Correct'] = merged['Assigned_Array'] == merged['KinnexLib']
+
+            counts = {"HIGH_CONF_correct": 0, "HIGH_CONF_incorrect": 0,
+                      "LOW_CONF_correct": 0, "LOW_CONF_incorrect": 0, "UNASSIGNED": 0}
+            counts_segments = {"HIGH_CONF_correct": 0, "HIGH_CONF_incorrect": 0,
+                               "LOW_CONF_correct": 0, "LOW_CONF_incorrect": 0, "UNASSIGNED": 0}
+            high_conf_errors = []
+            low_conf_errors = []
+
+            for _, row in merged.iterrows():
+                cls = row["Classification"]
+                assigned = row["Assigned_Array"]
+                true_lib = row["KinnexLib"]
+                zmw = row["ZMW"]
+                segments = row["Segments_per_ZMW"]
+                top_posterior = row.get("Top_Posterior", "N/A")
+                specific_bc = row.get("Specific_Barcodes", "N/A")
+                shared_bc   = row.get("Shared_Barcodes",   "N/A")
+                all_bc = row.get("All_Barcodes", "N/A")
+
+                if cls == "HIGH_CONF":
+                    if assigned == true_lib:
+                        counts["HIGH_CONF_correct"] += 1
+                        counts_segments["HIGH_CONF_correct"] += segments
+                    else:
+                        counts["HIGH_CONF_incorrect"] += 1
+                        counts_segments["HIGH_CONF_incorrect"] += segments
+                        high_conf_errors.append({
+                            "ZMW": zmw, "Segments": segments,
+                            "True_Library": true_lib, "Assigned_Library": assigned,
+                            "Top_Posterior": top_posterior,
+                            "Specific_BC": specific_bc, "Shared_BC": shared_bc,
+                            "All_Barcodes": all_bc
+                        })
+                elif cls == "LOW_CONF":
+                    if assigned == true_lib:
+                        counts["LOW_CONF_correct"] += 1
+                        counts_segments["LOW_CONF_correct"] += segments
+                    else:
+                        counts["LOW_CONF_incorrect"] += 1
+                        counts_segments["LOW_CONF_incorrect"] += segments
+                        low_conf_errors.append({
+                            "ZMW": zmw, "Segments": segments,
+                            "True_Library": true_lib, "Assigned_Library": assigned,
+                            "Top_Posterior": top_posterior,
+                            "Specific_BC": specific_bc, "Shared_BC": shared_bc,
+                            "All_Barcodes": all_bc
+                        })
+                elif cls == "UNASSIGNED":
+                    counts["UNASSIGNED"] += 1
+                    counts_segments["UNASSIGNED"] += segments
+
+            # Write detailed error report
+            with open(output.errors, "w") as f:
+                f.write("=== HIGH CONFIDENCE ERRORS ===\n")
+                f.write(f"Total: {len(high_conf_errors)} ZMWs ({sum(e['Segments'] for e in high_conf_errors)} segments)\n\n")
+                for err in high_conf_errors[:50]:
+                    f.write(f"ZMW: {err['ZMW']} ({err['Segments']} segments)\n")
+                    f.write(f"  True Library:     {err['True_Library']}\n")
+                    f.write(f"  Assigned Library: {err['Assigned_Library']}\n")
+                    f.write(f"  Top Posterior:    {err['Top_Posterior']}\n")
+                    f.write(f"  Specific BC:      {err['Specific_BC']}\n")
+                    f.write(f"  Shared BC:        {err['Shared_BC']}\n")
+                    f.write(f"  All Barcodes:     {err['All_Barcodes']}\n\n")
+                if len(high_conf_errors) > 50:
+                    f.write(f"... and {len(high_conf_errors) - 50} more ZMWs\n\n")
+                f.write("\n=== LOW CONFIDENCE ERRORS ===\n")
+                f.write(f"Total: {len(low_conf_errors)} ZMWs ({sum(e['Segments'] for e in low_conf_errors)} segments)\n\n")
+                for err in low_conf_errors[:50]:
+                    f.write(f"ZMW: {err['ZMW']} ({err['Segments']} segments)\n")
+                    f.write(f"  True Library:     {err['True_Library']}\n")
+                    f.write(f"  Assigned Library: {err['Assigned_Library']}\n")
+                    f.write(f"  Top Posterior:    {err['Top_Posterior']}\n")
+                    f.write(f"  Specific BC:      {err['Specific_BC']}\n")
+                    f.write(f"  Shared BC:        {err['Shared_BC']}\n")
+                    f.write(f"  All Barcodes:     {err['All_Barcodes']}\n\n")
+                if len(low_conf_errors) > 50:
+                    f.write(f"... and {len(low_conf_errors) - 50} more ZMWs\n")
+
+            # Write summary
+            with open(output.summary, "w") as f:
+                f.write("Category\tCount\tPercent\tSegmentCount\tSegmentPercent\n")
+                for cat in counts.keys():
+                    zmw_cnt = counts[cat]
+                    zmw_pct = (zmw_cnt / total_zmws * 100) if total_zmws > 0 else 0.0
+                    seg_cnt = counts_segments[cat]
+                    seg_pct = (seg_cnt / total_segments * 100) if total_segments > 0 else 0.0
+                    f.write(f"{cat}\t{zmw_cnt}\t{zmw_pct:.2f}\t{seg_cnt}\t{seg_pct:.2f}\n")
+
+            logging.info(f"Pool {wildcards.pool}, KN_BC {wildcards.knbc} QC:")
+            logging.info(f"  === PER ZMW ===")
+            for cat, cnt in counts.items():
+                logging.info(f"  {cat:25s}: {cnt:6,} ZMWs ({cnt/total_zmws*100:5.2f}%)")
+            logging.info(f"  === PER SEGMENT ===")
+            for cat, cnt in counts_segments.items():
+                logging.info(f"  {cat:25s}: {cnt:6,} segments ({cnt/total_segments*100:5.2f}%)")
+
+            # Threshold analysis
+            thresholds = [
+                {'name': 'Current HIGH_CONF',      'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+                {'name': 'Posterior >= 0.90',      'posterior': 0.90, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+                {'name': 'Posterior >= 0.95',      'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+                {'name': 'Posterior >= 0.99',      'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 0},
+                {'name': 'SpecBC >= 2',            'posterior': 0.0,  'min_specific_bc': 2, 'specific_frac': 0.0, 'min_segments': 0},
+                {'name': 'SpecBC >= 3',            'posterior': 0.0,  'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
+                {'name': 'Segments >= 3',          'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+                {'name': 'Segments >= 4',          'posterior': 0.0,  'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 4},
+                {'name': 'Post>=0.95+SpecBC>=3',   'posterior': 0.95, 'min_specific_bc': 3, 'specific_frac': 0.0, 'min_segments': 0},
+                {'name': 'Post>=0.95+Seg>=3',      'posterior': 0.95, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+                {'name': 'Post>=0.99+Seg>=3',      'posterior': 0.99, 'min_specific_bc': 0, 'specific_frac': 0.0, 'min_segments': 3},
+            ]
+
+            high_conf_df = merged[merged['Classification'] == 'HIGH_CONF'].copy()
+            threshold_results = []
+            for thresh in thresholds:
+                mask = (
+                    (high_conf_df['Top_Posterior'] >= thresh['posterior']) &
+                    (high_conf_df['Specific_Barcodes'] >= thresh['min_specific_bc']) &
+                    (high_conf_df['Specific_Fraction'] >= thresh['specific_frac']) &
+                    (high_conf_df['Segments_per_ZMW'] >= thresh['min_segments'])
+                )
+                filtered = high_conf_df[mask]
+                if len(filtered) == 0:
+                    continue
+                total_f = len(filtered)
+                correct_f = filtered['Correct'].sum()
+                accuracy = correct_f / total_f * 100
+                kept_pct = total_f / len(high_conf_df) * 100 if len(high_conf_df) > 0 else 0
+                threshold_results.append({
+                    'Threshold':            thresh['name'],
+                    'HIGH_CONF_ZMWs_Kept':  total_f,
+                    'ZMWs_Correct':         correct_f,
+                    'ZMWs_Incorrect':       total_f - correct_f,
+                    'Accuracy_%':           f"{accuracy:.2f}",
+                    'Kept_%_of_HIGH_CONF':  f"{kept_pct:.1f}",
+                })
+
+            pd.DataFrame(threshold_results).to_csv(output.threshold_table, index=False)
+        except Exception as e:
+            logging.error(f"Rule check_assignments failed for Pool={wildcards.pool}, KN_BC={wildcards.knbc}: {e}", exc_info=True)
+            raise
+        finally:
+            logging.getLogger().removeHandler(fh)
+            fh.close()
+
 
 # ----------------------------
 # Rule: Visualize posterior distributions
@@ -285,13 +298,16 @@ rule visualize_posteriors:
     threads: 1
     resources:
         mem=4, hrs=1
+    log:
+        "results/logs/{pool}_KN_{knbc}/visualize_posteriors.log"
     params:
         script=config["visualize_script"]
     shell:
         """
         mkdir -p results/qc/per_pool/{wildcards.pool}_KN_{wildcards.knbc}
+        mkdir -p $(dirname {log})
         python {params.script} {input.assignments} {input.read_lookup} \
-            {output.plot} {output.posterior_thresholds}
+            {output.plot} {output.posterior_thresholds} > {log} 2>&1
         """
 
 # ----------------------------
@@ -309,155 +325,168 @@ if REFINE_DIR:
         threads: 2
         resources:
             mem=8, hrs=1
+        log:
+            "results/logs/{pool}_KN_{knbc}/flnc_analysis.log"
         run:
             import glob
             from pathlib import Path
             from collections import Counter
 
-            pool = wildcards.pool
-            knbc = wildcards.knbc
+            os.makedirs(os.path.dirname(log[0]), exist_ok=True)
+            fh = logging.FileHandler(log[0])
+            fh.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
+            logging.getLogger().addHandler(fh)
+            try:
+                pool = wildcards.pool
+                knbc = wildcards.knbc
 
-            # Load and merge assignments with ground truth
-            truth_df = pd.read_csv(input.read_lookup, sep="\t", dtype=str)
-            assign_df = pd.read_csv(input.assignments, sep="\t", dtype=str, comment='#')
-            truth_df['Read'] = truth_df['Read'].apply(
-                lambda x: x[:-4] if x.endswith('/ccs') else x
-            )
-            truth_df = truth_df.rename(columns={'Read': 'ZMW'})
-            assign_df['Segments_per_ZMW'] = assign_df['All_Barcodes'].str.count(',') + 1
-            merged = pd.merge(assign_df, truth_df, on="ZMW", how="left")
-            merged['Top_Posterior'] = pd.to_numeric(merged['Top_Posterior'], errors='coerce')
-            merged['Specific_Barcodes'] = pd.to_numeric(merged['Specific_Barcodes'], errors='coerce')
-            merged['Specific_Fraction'] = merged['Specific_Barcodes'] / (
-                merged['Specific_Barcodes'] + pd.to_numeric(merged['Shared_Barcodes'], errors='coerce')
-            )
-            merged['Correct'] = merged['Assigned_Array'] == merged['KinnexLib']
-
-            # Collect FLNC segment IDs from refine report CSVs
-            flnc_zmws_highconf = set()
-            flnc_zmws_lowconf = set()
-            flnc_segments_highconf = set()
-            flnc_segments_lowconf = set()
-
-            pool_libs = pool_df[pool_df["Pool"].astype(str) == pool]["Kinnex_Lib"].unique()
-            for lib in pool_libs:
-                for conf_type in ['highconf', 'lowconf']:
-                    conf_dir = Path(REFINE_DIR) / pool / lib / conf_type
-                    if not conf_dir.exists():
-                        continue
-                    for csv_file in conf_dir.glob(f"{lib}.fl.*.flnc.report.csv"):
-                        try:
-                            flnc_df = pd.read_csv(csv_file)
-                            for read_id in flnc_df['id']:
-                                parts = read_id.split('/')
-                                if len(parts) >= 2:
-                                    zmw = f"{parts[0]}/{parts[1]}"
-                                    if conf_type == 'highconf':
-                                        flnc_zmws_highconf.add(zmw)
-                                        flnc_segments_highconf.add(read_id)
-                                    else:
-                                        flnc_zmws_lowconf.add(zmw)
-                                        flnc_segments_lowconf.add(read_id)
-                        except Exception as e:
-                            logging.warning(f"Could not read {csv_file}: {e}")
-
-            flnc_zmws_all = flnc_zmws_highconf | flnc_zmws_lowconf
-            flnc_segments_all = flnc_segments_highconf | flnc_segments_lowconf
-
-            # Pre-build ZMW -> FLNC segment count lookups
-            # Segment ID format: movie/zmw/ccs/coords — extract movie/zmw
-            flnc_seg_count_hc = Counter(seg_id.rsplit("/", 2)[0] for seg_id in flnc_segments_highconf)
-            flnc_seg_count_lc = Counter(seg_id.rsplit("/", 2)[0] for seg_id in flnc_segments_lowconf)
-
-            logging.info(f"FLNC: {len(flnc_zmws_highconf):,} ZMWs in highconf, {len(flnc_zmws_lowconf):,} in lowconf")
-
-            # Count FLNC outcomes per assignment category
-            flnc_counts = {
-                "HIGH_CONF_correct":   {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
-                "HIGH_CONF_incorrect": {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
-                "LOW_CONF_correct":    {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
-                "LOW_CONF_incorrect":  {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
-                "UNASSIGNED":          {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
-            }
-
-            for _, row in merged.iterrows():
-                cls = row["Classification"]
-                correct = row["Correct"]
-                zmw = row["ZMW"]
-                segs = row["Segments_per_ZMW"]
-
-                if cls == "HIGH_CONF":
-                    key = "HIGH_CONF_correct" if correct else "HIGH_CONF_incorrect"
-                elif cls == "LOW_CONF":
-                    key = "LOW_CONF_correct" if correct else "LOW_CONF_incorrect"
-                else:
-                    key = "UNASSIGNED"
-
-                c = flnc_counts[key]
-                if zmw in flnc_zmws_highconf: c["zmw_hc"] += 1
-                if zmw in flnc_zmws_lowconf:  c["zmw_lc"] += 1
-                if zmw not in flnc_zmws_all:  c["zmw_none"] += 1
-                c["total_seg"] += segs
-                c["flnc_hc"]   += flnc_seg_count_hc.get(zmw, 0)
-                c["flnc_lc"]   += flnc_seg_count_lc.get(zmw, 0)
-
-            # Write FLNC summary
-            with open(output.flnc_summary, "w") as f:
-                f.write("Category\tZMWs_FLNC_HC\tZMWs_FLNC_LC\tZMWs_no_FLNC\tTotal_Segments\tFLNC_Segs_HC\tFLNC_Segs_LC\tFLNC_Segs_Total\tSegment_Yield_%\n")
-                for cat, c in flnc_counts.items():
-                    flnc_total = c["flnc_hc"] + c["flnc_lc"]
-                    yield_pct = (flnc_total / c["total_seg"] * 100) if c["total_seg"] > 0 else 0
-                    f.write(f"{cat}\t{c['zmw_hc']}\t{c['zmw_lc']}\t{c['zmw_none']}\t"
-                            f"{c['total_seg']}\t{c['flnc_hc']}\t{c['flnc_lc']}\t{flnc_total}\t{yield_pct:.2f}\n")
-                f.write(f"\nTotal FLNC segments (highconf): {len(flnc_segments_highconf):,}\n")
-                f.write(f"Total FLNC segments (lowconf):  {len(flnc_segments_lowconf):,}\n")
-                f.write(f"Total FLNC segments (all):      {len(flnc_segments_all):,}\n")
-                hc_inc = flnc_counts["HIGH_CONF_incorrect"]
-                f.write(f"\nHIGH_CONF incorrect FLNC segs in highconf: {hc_inc['flnc_hc']} <- MISASSIGNED TRANSCRIPTS\n")
-
-            # FLNC-aware threshold analysis
-            high_conf_df = merged[merged['Classification'] == 'HIGH_CONF'].copy()
-            thresholds = [
-                {'name': 'Current HIGH_CONF',    'posterior': 0.0,  'min_specific_bc': 0, 'min_segments': 0},
-                {'name': 'Posterior >= 0.90',    'posterior': 0.90, 'min_specific_bc': 0, 'min_segments': 0},
-                {'name': 'Posterior >= 0.95',    'posterior': 0.95, 'min_specific_bc': 0, 'min_segments': 0},
-                {'name': 'Posterior >= 0.99',    'posterior': 0.99, 'min_specific_bc': 0, 'min_segments': 0},
-                {'name': 'SpecBC >= 2',          'posterior': 0.0,  'min_specific_bc': 2, 'min_segments': 0},
-                {'name': 'SpecBC >= 3',          'posterior': 0.0,  'min_specific_bc': 3, 'min_segments': 0},
-                {'name': 'Segments >= 3',        'posterior': 0.0,  'min_specific_bc': 0, 'min_segments': 3},
-                {'name': 'Segments >= 4',        'posterior': 0.0,  'min_specific_bc': 0, 'min_segments': 4},
-                {'name': 'Post>=0.95+SpecBC>=3', 'posterior': 0.95, 'min_specific_bc': 3, 'min_segments': 0},
-                {'name': 'Post>=0.95+Seg>=3',    'posterior': 0.95, 'min_specific_bc': 0, 'min_segments': 3},
-                {'name': 'Post>=0.99+Seg>=3',    'posterior': 0.99, 'min_specific_bc': 0, 'min_segments': 3},
-            ]
-            threshold_results = []
-            for thresh in thresholds:
-                mask = (
-                    (high_conf_df['Top_Posterior']    >= thresh['posterior']) &
-                    (high_conf_df['Specific_Barcodes'] >= thresh['min_specific_bc']) &
-                    (high_conf_df['Segments_per_ZMW'] >= thresh['min_segments'])
+                # Load and merge assignments with ground truth
+                truth_df = pd.read_csv(input.read_lookup, sep="\t", dtype=str)
+                assign_df = pd.read_csv(input.assignments, sep="\t", dtype=str, comment='#')
+                truth_df['Read'] = truth_df['Read'].apply(
+                    lambda x: x[:-4] if x.endswith('/ccs') else x
                 )
-                filtered = high_conf_df[mask]
-                if len(filtered) == 0:
-                    continue
-                total_f = len(filtered)
-                correct_f = filtered['Correct'].sum()
-                incorrect = filtered[~filtered['Correct']]
-                flnc_inc_hc = sum(flnc_seg_count_hc.get(z, 0) for z in incorrect['ZMW'])
-                flnc_inc_lc = sum(flnc_seg_count_lc.get(z, 0) for z in incorrect['ZMW'])
-                threshold_results.append({
-                    'Threshold':           thresh['name'],
-                    'HIGH_CONF_ZMWs_Kept': total_f,
-                    'ZMWs_Correct':        correct_f,
-                    'ZMWs_Incorrect':      total_f - correct_f,
-                    'Accuracy_%':          f"{correct_f/total_f*100:.2f}",
-                    'Kept_%_of_HIGH_CONF': f"{total_f/len(high_conf_df)*100:.1f}",
-                    'FLNC_Incorrect_HC':   flnc_inc_hc,
-                    'FLNC_Incorrect_LC':   flnc_inc_lc,
-                    'FLNC_Incorrect_Total': flnc_inc_hc + flnc_inc_lc,
-                })
-            pd.DataFrame(threshold_results).to_csv(output.flnc_thresholds, index=False)
-            logging.info(f"FLNC analysis complete for Pool {pool}, KN_BC {knbc}")
+                truth_df = truth_df.rename(columns={'Read': 'ZMW'})
+                assign_df['Segments_per_ZMW'] = assign_df['All_Barcodes'].str.count(',') + 1
+                merged = pd.merge(assign_df, truth_df, on="ZMW", how="left")
+                merged['Top_Posterior'] = pd.to_numeric(merged['Top_Posterior'], errors='coerce')
+                merged['Specific_Barcodes'] = pd.to_numeric(merged['Specific_Barcodes'], errors='coerce')
+                merged['Specific_Fraction'] = merged['Specific_Barcodes'] / (
+                    merged['Specific_Barcodes'] + pd.to_numeric(merged['Shared_Barcodes'], errors='coerce')
+                )
+                merged['Correct'] = merged['Assigned_Array'] == merged['KinnexLib']
+
+                # Collect FLNC segment IDs from refine report CSVs
+                flnc_zmws_highconf = set()
+                flnc_zmws_lowconf = set()
+                flnc_segments_highconf = set()
+                flnc_segments_lowconf = set()
+
+                pool_libs = pool_df[pool_df["Pool"].astype(str) == pool]["Kinnex_Lib"].unique()
+                for lib in pool_libs:
+                    for conf_type in ['highconf', 'lowconf']:
+                        conf_dir = Path(REFINE_DIR) / pool / lib / conf_type
+                        if not conf_dir.exists():
+                            continue
+                        for csv_file in conf_dir.glob(f"{lib}.fl.*.flnc.report.csv"):
+                            try:
+                                flnc_df = pd.read_csv(csv_file)
+                                for read_id in flnc_df['id']:
+                                    parts = read_id.split('/')
+                                    if len(parts) >= 2:
+                                        zmw = f"{parts[0]}/{parts[1]}"
+                                        if conf_type == 'highconf':
+                                            flnc_zmws_highconf.add(zmw)
+                                            flnc_segments_highconf.add(read_id)
+                                        else:
+                                            flnc_zmws_lowconf.add(zmw)
+                                            flnc_segments_lowconf.add(read_id)
+                            except Exception as e:
+                                logging.warning(f"Could not read {csv_file}: {e}")
+
+                flnc_zmws_all = flnc_zmws_highconf | flnc_zmws_lowconf
+                flnc_segments_all = flnc_segments_highconf | flnc_segments_lowconf
+
+                # Pre-build ZMW -> FLNC segment count lookups
+                # Segment ID format: movie/zmw/ccs/coords — extract movie/zmw
+                flnc_seg_count_hc = Counter(seg_id.rsplit("/", 2)[0] for seg_id in flnc_segments_highconf)
+                flnc_seg_count_lc = Counter(seg_id.rsplit("/", 2)[0] for seg_id in flnc_segments_lowconf)
+
+                logging.info(f"FLNC: {len(flnc_zmws_highconf):,} ZMWs in highconf, {len(flnc_zmws_lowconf):,} in lowconf")
+
+                # Count FLNC outcomes per assignment category
+                flnc_counts = {
+                    "HIGH_CONF_correct":   {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
+                    "HIGH_CONF_incorrect": {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
+                    "LOW_CONF_correct":    {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
+                    "LOW_CONF_incorrect":  {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
+                    "UNASSIGNED":          {"zmw_hc": 0, "zmw_lc": 0, "zmw_none": 0, "total_seg": 0, "flnc_hc": 0, "flnc_lc": 0},
+                }
+
+                for _, row in merged.iterrows():
+                    cls = row["Classification"]
+                    correct = row["Correct"]
+                    zmw = row["ZMW"]
+                    segs = row["Segments_per_ZMW"]
+
+                    if cls == "HIGH_CONF":
+                        key = "HIGH_CONF_correct" if correct else "HIGH_CONF_incorrect"
+                    elif cls == "LOW_CONF":
+                        key = "LOW_CONF_correct" if correct else "LOW_CONF_incorrect"
+                    else:
+                        key = "UNASSIGNED"
+
+                    c = flnc_counts[key]
+                    if zmw in flnc_zmws_highconf: c["zmw_hc"] += 1
+                    if zmw in flnc_zmws_lowconf:  c["zmw_lc"] += 1
+                    if zmw not in flnc_zmws_all:  c["zmw_none"] += 1
+                    c["total_seg"] += segs
+                    c["flnc_hc"]   += flnc_seg_count_hc.get(zmw, 0)
+                    c["flnc_lc"]   += flnc_seg_count_lc.get(zmw, 0)
+
+                # Write FLNC summary
+                with open(output.flnc_summary, "w") as f:
+                    f.write("Category\tZMWs_FLNC_HC\tZMWs_FLNC_LC\tZMWs_no_FLNC\tTotal_Segments\tFLNC_Segs_HC\tFLNC_Segs_LC\tFLNC_Segs_Total\tSegment_Yield_%\n")
+                    for cat, c in flnc_counts.items():
+                        flnc_total = c["flnc_hc"] + c["flnc_lc"]
+                        yield_pct = (flnc_total / c["total_seg"] * 100) if c["total_seg"] > 0 else 0
+                        f.write(f"{cat}\t{c['zmw_hc']}\t{c['zmw_lc']}\t{c['zmw_none']}\t"
+                                f"{c['total_seg']}\t{c['flnc_hc']}\t{c['flnc_lc']}\t{flnc_total}\t{yield_pct:.2f}\n")
+                    f.write(f"\nTotal FLNC segments (highconf): {len(flnc_segments_highconf):,}\n")
+                    f.write(f"Total FLNC segments (lowconf):  {len(flnc_segments_lowconf):,}\n")
+                    f.write(f"Total FLNC segments (all):      {len(flnc_segments_all):,}\n")
+                    hc_inc = flnc_counts["HIGH_CONF_incorrect"]
+                    f.write(f"\nHIGH_CONF incorrect FLNC segs in highconf: {hc_inc['flnc_hc']} <- MISASSIGNED TRANSCRIPTS\n")
+
+                # FLNC-aware threshold analysis
+                high_conf_df = merged[merged['Classification'] == 'HIGH_CONF'].copy()
+                thresholds = [
+                    {'name': 'Current HIGH_CONF',    'posterior': 0.0,  'min_specific_bc': 0, 'min_segments': 0},
+                    {'name': 'Posterior >= 0.90',    'posterior': 0.90, 'min_specific_bc': 0, 'min_segments': 0},
+                    {'name': 'Posterior >= 0.95',    'posterior': 0.95, 'min_specific_bc': 0, 'min_segments': 0},
+                    {'name': 'Posterior >= 0.99',    'posterior': 0.99, 'min_specific_bc': 0, 'min_segments': 0},
+                    {'name': 'SpecBC >= 2',          'posterior': 0.0,  'min_specific_bc': 2, 'min_segments': 0},
+                    {'name': 'SpecBC >= 3',          'posterior': 0.0,  'min_specific_bc': 3, 'min_segments': 0},
+                    {'name': 'Segments >= 3',        'posterior': 0.0,  'min_specific_bc': 0, 'min_segments': 3},
+                    {'name': 'Segments >= 4',        'posterior': 0.0,  'min_specific_bc': 0, 'min_segments': 4},
+                    {'name': 'Post>=0.95+SpecBC>=3', 'posterior': 0.95, 'min_specific_bc': 3, 'min_segments': 0},
+                    {'name': 'Post>=0.95+Seg>=3',    'posterior': 0.95, 'min_specific_bc': 0, 'min_segments': 3},
+                    {'name': 'Post>=0.99+Seg>=3',    'posterior': 0.99, 'min_specific_bc': 0, 'min_segments': 3},
+                ]
+                threshold_results = []
+                for thresh in thresholds:
+                    mask = (
+                        (high_conf_df['Top_Posterior']    >= thresh['posterior']) &
+                        (high_conf_df['Specific_Barcodes'] >= thresh['min_specific_bc']) &
+                        (high_conf_df['Segments_per_ZMW'] >= thresh['min_segments'])
+                    )
+                    filtered = high_conf_df[mask]
+                    if len(filtered) == 0:
+                        continue
+                    total_f = len(filtered)
+                    correct_f = filtered['Correct'].sum()
+                    incorrect = filtered[~filtered['Correct']]
+                    flnc_inc_hc = sum(flnc_seg_count_hc.get(z, 0) for z in incorrect['ZMW'])
+                    flnc_inc_lc = sum(flnc_seg_count_lc.get(z, 0) for z in incorrect['ZMW'])
+                    threshold_results.append({
+                        'Threshold':           thresh['name'],
+                        'HIGH_CONF_ZMWs_Kept': total_f,
+                        'ZMWs_Correct':        correct_f,
+                        'ZMWs_Incorrect':      total_f - correct_f,
+                        'Accuracy_%':          f"{correct_f/total_f*100:.2f}",
+                        'Kept_%_of_HIGH_CONF': f"{total_f/len(high_conf_df)*100:.1f}",
+                        'FLNC_Incorrect_HC':   flnc_inc_hc,
+                        'FLNC_Incorrect_LC':   flnc_inc_lc,
+                        'FLNC_Incorrect_Total': flnc_inc_hc + flnc_inc_lc,
+                    })
+                pd.DataFrame(threshold_results).to_csv(output.flnc_thresholds, index=False)
+                logging.info(f"FLNC analysis complete for Pool {pool}, KN_BC {knbc}")
+            except Exception as e:
+                logging.error(f"Rule flnc_analysis failed for Pool={wildcards.pool}, KN_BC={wildcards.knbc}: {e}", exc_info=True)
+                raise
+            finally:
+                logging.getLogger().removeHandler(fh)
+                fh.close()
 
 # ----------------------------
 # Rule: Aggregate QC tables
@@ -480,55 +509,64 @@ rule aggregate_qc:
     threads: 2
     resources:
         mem=8, hrs=1
+    log:
+        "results/logs/aggregate_qc.log"
     run:
-        categories = ["HIGH_CONF_correct", "HIGH_CONF_incorrect",
-                      "LOW_CONF_correct", "LOW_CONF_incorrect", "UNASSIGNED"]
+        os.makedirs(os.path.dirname(log[0]), exist_ok=True)
+        fh = logging.FileHandler(log[0])
+        fh.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
+        logging.getLogger().addHandler(fh)
+        try:
+            categories = ["HIGH_CONF_correct", "HIGH_CONF_incorrect",
+                          "LOW_CONF_correct", "LOW_CONF_incorrect", "UNASSIGNED"]
 
-        unique_pools = sorted(set(POOLS))
-        unique_knbcs = sorted(set(KNBCS))
+            unique_pools = sorted(set(POOLS))
+            unique_knbcs = sorted(set(KNBCS))
 
-        output_map = {
-            "HIGH_CONF_correct":   output.high_conf_correct,
-            "HIGH_CONF_incorrect": output.high_conf_incorrect,
-            "LOW_CONF_correct":    output.low_conf_correct,
-            "LOW_CONF_incorrect":  output.low_conf_incorrect,
-            "UNASSIGNED":          output.unassigned,
-        }
+            output_map = {
+                "HIGH_CONF_correct":   output.high_conf_correct,
+                "HIGH_CONF_incorrect": output.high_conf_incorrect,
+                "LOW_CONF_correct":    output.low_conf_correct,
+                "LOW_CONF_incorrect":  output.low_conf_incorrect,
+                "UNASSIGNED":          output.unassigned,
+            }
 
-        all_df = []
-        for f in input.summaries:
-            try:
-                df = pd.read_csv(f, sep="\t")
-                df = df[df["Category"].isin(categories)].copy()
-            except Exception as e:
-                raise ValueError(f"Error reading summary file {f}: {e}")
+            all_df = []
+            for pool, knbc, f in zip(POOLS, KNBCS, input.summaries):
+                try:
+                    df = pd.read_csv(f, sep="\t")
+                    df = df[df["Category"].isin(categories)].copy()
+                except Exception as e:
+                    raise ValueError(f"Error reading summary file {f}: {e}")
 
-            # Extract pool and knbc from path: per_pool/{pool}_KN_{knbc}/summary.txt
-            parts = Path(f).parent.name.split("_KN_")
-            pool = parts[0]
-            knbc = parts[1]
-            df["Pool"] = pool
-            df["KN_BC"] = knbc
+                df["Pool"] = pool
+                df["KN_BC"] = knbc
 
-            total_count = df["Count"].sum()
-            df["Fraction"] = df["Count"] / total_count if total_count > 0 else 0.0
-            all_df.append(df)
+                total_count = df["Count"].sum()
+                df["Fraction"] = df["Count"] / total_count if total_count > 0 else 0.0
+                all_df.append(df)
 
-        df = pd.concat(all_df, ignore_index=True)
-        agg_df = df.groupby(["Pool", "KN_BC", "Category"], as_index=False).agg({"Fraction": "sum"})
+            df = pd.concat(all_df, ignore_index=True)
+            agg_df = df.groupby(["Pool", "KN_BC", "Category"], as_index=False).agg({"Fraction": "sum"})
 
-        tables = {}
-        for cat in categories:
-            cat_df = agg_df[agg_df["Category"] == cat].pivot(
-                index="Pool", columns="KN_BC", values="Fraction"
-            )
-            cat_df = cat_df.reindex(index=unique_pools, columns=unique_knbcs, fill_value=0).fillna(0)
-            tables[cat] = cat_df
-            cat_df.to_csv(output_map[cat], sep="\t")
+            tables = {}
+            for cat in categories:
+                cat_df = agg_df[agg_df["Category"] == cat].pivot(
+                    index="Pool", columns="KN_BC", values="Fraction"
+                )
+                cat_df = cat_df.reindex(index=unique_pools, columns=unique_knbcs, fill_value=0).fillna(0)
+                tables[cat] = cat_df
+                cat_df.to_csv(output_map[cat], sep="\t")
 
-        total_table = pd.DataFrame(0, index=unique_pools, columns=unique_knbcs)
-        for cat_table in tables.values():
-            total_table = total_table.add(cat_table, fill_value=0)
-        total_table.fillna(0).to_csv(output.total_fraction, sep="\t")
+            total_table = pd.DataFrame(0, index=unique_pools, columns=unique_knbcs)
+            for cat_table in tables.values():
+                total_table = total_table.add(cat_table, fill_value=0)
+            total_table.fillna(0).to_csv(output.total_fraction, sep="\t")
 
-        logging.info(f"QC aggregation complete. Generated {len(categories)} category tables and 1 total fraction table")
+            logging.info(f"QC aggregation complete. Generated {len(categories)} category tables and 1 total fraction table")
+        except Exception as e:
+            logging.error(f"Rule aggregate_qc failed: {e}", exc_info=True)
+            raise
+        finally:
+            logging.getLogger().removeHandler(fh)
+            fh.close()
