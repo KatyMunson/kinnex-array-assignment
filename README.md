@@ -150,7 +150,7 @@ Single-library and multi-library samples can coexist in one manifest:
 ```
 prod_script/
 ├── Snakefile
-├── config.yaml
+├── config.yaml.example       ← copy to config.yaml and edit with your paths
 ├── manifest.tab              ← your run manifest (not committed — see manifest.tab.example)
 ├── primers/
 │   └── primers.fasta
@@ -200,6 +200,9 @@ total memory request.
 ### Running
 
 ```bash
+# First-time setup: copy the template and edit with your local paths
+cp config.yaml.example config.yaml
+
 # Dry run
 snakemake -s Snakefile --configfile config.yaml -n
 
@@ -290,8 +293,8 @@ known, these pools have exact ground truth for QC validation.
 test_script/
 ├── Snakefile_subsample
 ├── Snakefile_qc
-├── config_subsample.yaml
-├── config_qc.yaml
+├── config_subsample.yaml.example  ← copy to config_subsample.yaml and edit
+├── config_qc.yaml.example         ← copy to config_qc.yaml and edit
 ├── pool.tsv                   ← pool metadata (not committed — see pool.tsv.example)
 ├── manifest_preskera.tsv      ← pre-Skera BAM paths per library (not committed)
 └── scripts/
@@ -346,6 +349,9 @@ random_seed: 42
 ### Running
 
 ```bash
+# First-time setup
+cp config_subsample.yaml.example config_subsample.yaml
+
 snakemake -s Snakefile_subsample --configfile config_subsample.yaml --cores 4
 ```
 
@@ -415,6 +421,9 @@ visualize_script: "scripts/visualize_posteriors.py"
 ### Running
 
 ```bash
+# First-time setup
+cp config_qc.yaml.example config_qc.yaml
+
 snakemake -s Snakefile_qc --configfile config_qc.yaml --cores 4
 ```
 

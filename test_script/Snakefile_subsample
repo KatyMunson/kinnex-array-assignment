@@ -33,8 +33,6 @@ logging.basicConfig(
 # ----------------------------
 # Config / Inputs
 # ----------------------------
-configfile: "config_subsample.yaml"
-
 POOL_TSV = config["pool_tsv"]
 MANIFEST = config["manifest"]
 

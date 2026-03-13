@@ -30,8 +30,6 @@ logging.basicConfig(
 # ----------------------------
 # Config / Inputs
 # ----------------------------
-configfile: "config_qc.yaml"
-
 POOL_TSV = config["pool_tsv"]
 ASSIGNMENT_DIR = config["assignment_dir"]  # Directory with assignment results from production
 LOOKUP_DIR = config["lookup_dir"]  # Directory with read lookup files from subsampling
